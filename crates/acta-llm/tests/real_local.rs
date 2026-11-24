@@ -101,6 +101,7 @@ fn meeting() -> MinutesInput {
             .collect(),
         captures: vec![],
         language: "es".into(),
+        user_note: None,
     }
 }
 

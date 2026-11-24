@@ -118,6 +118,16 @@ describe("SettingsContainer", () => {
     await waitFor(() => expect(controls.state.settings.titles).toEqual({ calendar: true }));
   });
 
+  it("limpiar el transcript con el LLM viene encendido y se puede apagar", async () => {
+    const { controls } = setup();
+    const toggle = await screen.findByRole("checkbox", { name: "Limpiar el transcript con IA" });
+    expect(toggle).toBeChecked();
+    expect(controls.state.settings.transcription.llmCleanup).toBe(true);
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole("button", { name: "Guardar cambios" }));
+    await waitFor(() => expect(controls.state.settings.transcription.llmCleanup).toBe(false));
+  });
+
   it("esconde lo técnico de un proveedor tras «Avanzado»", async () => {
     setup();
     await goTo("Proveedores de IA");

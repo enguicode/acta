@@ -189,6 +189,24 @@ async fn renaming_a_meeting_announces_it() {
 }
 
 #[tokio::test]
+async fn the_personal_note_is_saved_trimmed_cleared_when_blank_and_announced() {
+    let r = rig().await;
+    let id = meeting(&r.core, 3).await;
+    let m = r.core.meeting_set_note(id, "  Pedir descuento  ".into()).await.unwrap();
+    assert_eq!(m.user_note.as_deref(), Some("Pedir descuento"));
+    assert!(r.events.0.lock().unwrap().iter().any(|(n, _)| n == "meeting:updated"));
+    let detail = r.core.meeting_get(id).await.unwrap();
+    assert_eq!(detail.meeting.user_note.as_deref(), Some("Pedir descuento"));
+    assert_eq!(r.core.meeting_set_note(id, "   ".into()).await.unwrap().user_note, None);
+    assert!(matches!(r.core.meeting_set_note(MeetingId::from_u128(999), "x".into()).await, Err(PortError::NotFound(_))));
+}
+
+#[test]
+fn the_note_command_is_in_the_contract() {
+    assert_eq!(acta_core::api::command_names::MEETING_SET_NOTE, "meeting_set_note");
+}
+
+#[tokio::test]
 async fn chat_streams_deltas_and_saves_both_messages() {
     let r = rig().await;
     let id = meeting(&r.core, 4).await;

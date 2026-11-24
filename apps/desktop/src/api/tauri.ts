@@ -19,6 +19,7 @@ export function createTauriApi(): ActaApi {
     meetingsList: (query) => invoke(C.meetingsList, { query }),
     meetingGet: (id) => invoke(C.meetingGet, { id }),
     meetingUpdate: (id, title) => invoke(C.meetingUpdate, { id, title }),
+    meetingSetNote: (id, note) => invoke(C.meetingSetNote, { id, note }),
     meetingDelete: (id) => invoke(C.meetingDelete, { id }),
     meetingSetFavourite: (id, favourite) => invoke(C.meetingSetFavourite, { id, favourite }),
     meetingReprocess: (request) => invoke(C.meetingReprocess, { request }),

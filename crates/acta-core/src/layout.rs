@@ -140,6 +140,10 @@ impl DataLayout {
         self.transcript_dir(id)
             .join(format!("segments-{}.json", track.as_str()))
     }
+    /// Caché del pipeline: limpieza LLM del transcript (texto crudo → limpio).
+    pub fn cleanup_cache_json(&self, id: MeetingId) -> PathBuf {
+        self.transcript_dir(id).join("cleanup.json")
+    }
     /// Caché del pipeline: `DiarizationResult` de la pista system.
     pub fn diarization_cache_json(&self, id: MeetingId) -> PathBuf {
         self.transcript_dir(id).join("diarization-result.json")

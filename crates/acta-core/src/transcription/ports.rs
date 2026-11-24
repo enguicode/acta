@@ -45,3 +45,19 @@ pub trait LiveTranscriber: Send + Sync {
 pub trait SpeakerNamer: Send + Sync {
     async fn name_speakers(&self, input: SpeakerNamingInput) -> PortResult<Vec<SpeakerNameGuess>>;
 }
+
+/// Limpia el texto del ASR (jerga mal oída, puntuación, mayúsculas) sin tocar
+/// quién habla, cuándo ni cuántas intervenciones hay. Impl: acta-llm.
+///
+/// Devuelve EXACTAMENTE un elemento por texto de entrada: `Some(texto limpio)`
+/// o `None` si esa tanda falló (el que llama conserva el texto crudo y NO
+/// guarda nada en caché, para reintentarlo en el siguiente procesado).
+#[async_trait]
+pub trait TranscriptCleaner: Send + Sync {
+    async fn clean(&self, input: CleanupInput) -> Vec<Option<String>>;
+    /// Versión del prompt/reglas: entra en la clave de caché, así que
+    /// cambiarla invalida lo ya limpiado.
+    fn version(&self) -> String {
+        "1".into()
+    }
+}

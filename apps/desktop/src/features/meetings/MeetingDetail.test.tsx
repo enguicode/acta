@@ -64,6 +64,27 @@ describe("MeetingDetailContainer", () => {
     expect(await screen.findByRole("heading", { name: "Plan Q4" })).toBeInTheDocument();
   });
 
+  it("guarda la nota para mí al salir del campo y la muestra al volver", async () => {
+    const { controls } = setup();
+    const note = await screen.findByRole("textbox", { name: "Nota para mí" });
+    expect(note).toHaveValue("");
+    await userEvent.type(note, "Pedir descuento a Ana");
+    expect(controls.state.meetings[0]!.meeting.userNote ?? null).toBeNull();
+    await userEvent.tab();
+    await waitFor(() => expect(controls.state.meetings[0]!.meeting.userNote).toBe("Pedir descuento a Ana"));
+  });
+
+  it("enseña la nota guardada y vaciarla la borra", async () => {
+    const { controls } = setup((d) => {
+      d.meeting.userNote = "Ya estaba";
+    });
+    const note = await screen.findByRole("textbox", { name: "Nota para mí" });
+    expect(note).toHaveValue("Ya estaba");
+    await userEvent.clear(note);
+    await userEvent.tab();
+    await waitFor(() => expect(controls.state.meetings[0]!.meeting.userNote ?? null).toBeNull());
+  });
+
   it("si el procesado falló, permite reintentar", async () => {
     const { controls } = setup((d) => {
       d.meeting.status = "failed";

@@ -1,0 +1,21 @@
+{
+  "title": "acta.transcript_cleanup.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["segmentos"],
+  "properties": {
+    "segmentos": {
+      "type": "array",
+      "description": "Un elemento por segmento de entrada, con el mismo id y en el mismo orden.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "texto"],
+        "properties": {
+          "id": { "type": "integer", "description": "El id del segmento de entrada, tal cual." },
+          "texto": { "type": "string", "description": "El mismo segmento, corregido." }
+        }
+      }
+    }
+  }
+}

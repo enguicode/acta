@@ -16,8 +16,9 @@ use acta_core::settings::Settings;
 use acta_core::time::Clock;
 use acta_core::transcription::{Diarizer, Transcriber};
 use acta_core::{PortError, PortResult};
-use acta_core::transcription::SpeakerNamer;
+use acta_core::transcription::{SpeakerNamer, TranscriptCleaner};
 use acta_llm::minutes::LlmMinutesGenerator;
+use acta_llm::cleanup::LlmTranscriptCleaner;
 use acta_llm::naming::speakers::LlmSpeakerNamer;
 use async_trait::async_trait;
 use std::sync::{Arc, RwLock};
@@ -122,6 +123,14 @@ impl DynamicPipeline {
         let (_, provider) = build_provider(settings, self.factory.as_ref(), settings.llm.minutes_provider.as_ref()).ok()?;
         Some(Arc::new(LlmSpeakerNamer::new(provider)))
     }
+
+    /// Mismo proveedor que el acta. Sin proveedor no hay limpieza (el texto se
+    /// queda como lo dejó el ASR + glosario); con él, la casilla de Ajustes
+    /// (`transcription.llmCleanup`, encendida de fábrica) decide.
+    fn cleaner(&self, settings: &Settings) -> Option<Arc<dyn TranscriptCleaner>> {
+        let (_, provider) = build_provider(settings, self.factory.as_ref(), settings.llm.minutes_provider.as_ref()).ok()?;
+        Some(Arc::new(LlmTranscriptCleaner::new(provider)))
+    }
 }
 
 #[async_trait]
@@ -137,6 +146,7 @@ impl ProcessingPipeline for DynamicPipeline {
             layout: self.layout.clone(),
             minutes: self.minutes(&settings, &failed),
             speaker_namer: self.speaker_namer(&settings),
+            cleaner: self.cleaner(&settings),
             settings,
             store: self.store.clone(),
             voiceprints: self.voiceprints.clone(),

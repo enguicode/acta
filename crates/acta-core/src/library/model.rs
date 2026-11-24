@@ -41,6 +41,10 @@ pub struct Meeting {
     pub error_provider: Option<String>,
     #[serde(default)]
     pub error_model: Option<String>,
+    /// Nota personal del usuario (nota para mí). Privada: es contexto para
+    /// el LLM y sale en el acta en su propia sección, sin atribuirla a nadie.
+    #[serde(default)]
+    pub user_note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +68,8 @@ pub struct MeetingPatch {
     pub recovered: Option<bool>,
     /// `Some(None)` borra el error.
     pub error: Option<Option<String>>,
+    /// `Some(None)` borra la nota.
+    pub user_note: Option<Option<String>>,
 }
 
 /// Fila de la lista de reuniones.

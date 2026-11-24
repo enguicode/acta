@@ -9,7 +9,7 @@
 //! | `concatenating` | segmentos + manifiesto, `live/screen.jsonl` | `audio/{mic,system,mix}.wav`, duración, tramos de pantalla |
 //! | `transcribing` | `audio/<track>.wav` | `transcript/segments-<track>.json` |
 //! | `diarizing` | `audio/system.wav` | `transcript/diarization-result.json` |
-//! | `namingSpeakers` | cachés anteriores + `live/speakers.jsonl` + huellas + LLM (nombres dichos en la reunión) | transcript en el store |
+//! | `namingSpeakers` | cachés anteriores + `live/speakers.jsonl` + huellas + LLM (limpieza del texto con el glosario, `transcript/cleanup.json`; nombres dichos en la reunión) | transcript en el store |
 //! | `summarizing` | transcript + capturas | acta en el store + `llm/minutes.json` |
 //! | `indexing` | transcript | chunks, FTS, vectores |
 //! | `pruningCaptures` | `llm/minutes.json` | candidatas promovidas a `llmPick` o borradas |
@@ -18,6 +18,8 @@
 //! buscable y la reunión acaba en `failed` con el error para reintentar.
 
 pub mod captures;
+pub mod energy;
+pub mod glossary;
 pub mod merge;
 pub mod voiceprints;
 
@@ -35,8 +37,8 @@ use acta_core::screen::{CaptureReason, ScreenEvent, ScreenShare};
 use acta_core::settings::Settings;
 use acta_core::time::MediaMs;
 use acta_core::transcription::{
-    AsrSegment, DiarizationResult, DiarizeOptions, Diarizer, NameSource, SpeakerNamer, SpeakerNamingInput, TranscribeRequest,
-    Transcriber, Transcript,
+    AsrSegment, CleanupInput, DiarizationResult, DiarizeOptions, Diarizer, NameSource, SpeakerNamer, SpeakerNamingInput,
+    TranscribeRequest, Transcriber, TranscriptCleaner, Transcript,
 };
 use acta_core::{PortError, PortResult};
 use async_trait::async_trait;
@@ -57,6 +59,18 @@ pub struct DefaultPipeline {
     /// Nombres deducidos de la conversación para los "Speaker N" (LLM).
     /// `None` = sin proveedor: se quedan genéricos.
     pub speaker_namer: Option<Arc<dyn SpeakerNamer>>,
+    /// Limpieza del texto con el LLM (jerga mal oída, puntuación). `None` = sin
+    /// proveedor: el texto se queda como lo dejó el ASR + glosario.
+    pub cleaner: Option<Arc<dyn TranscriptCleaner>>,
+}
+
+/// Caché de la limpieza LLM: texto tal como sale del merge → texto limpio.
+/// `fingerprint` agrupa todo lo que cambia el resultado (reglas del prompt,
+/// idioma, glosario): si no coincide, la caché entera no vale.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct CleanupCache {
+    fingerprint: String,
+    entries: HashMap<String, String>,
 }
 
 /// Duración media del manifiesto (la pista más larga).
@@ -255,9 +269,29 @@ impl DefaultPipeline {
         write_json(&self.layout.diarization_cache_json(id), &result)
     }
 
+    /// Envolventes de energía de mic y system para separar voz propia de bleed.
+    /// Sin una de las pistas (o si falla la lectura) → `None` y la fusión
+    /// resuelve los duplicados a favor del sistema.
+    async fn track_levels(&self, id: MeetingId) -> Option<energy::TrackLevels> {
+        let mic = self.layout.track_wav(id, Track::Mic);
+        let system = self.layout.track_wav(id, Track::System);
+        if !mic.exists() || !system.exists() {
+            return None;
+        }
+        let r = blocking(move || {
+            Ok(energy::TrackLevels { mic: energy::Envelope::from_wav(&mic)?, system: energy::Envelope::from_wav(&system)? })
+        })
+        .await;
+        r.map_err(|e| tracing::warn!("envolventes de energía no disponibles: {e}")).ok()
+    }
+
     async fn name_speakers(&self, id: MeetingId) -> PortResult<()> {
-        let mic: Vec<AsrSegment> = read_json(&self.layout.asr_cache_json(id, Track::Mic)).unwrap_or_default();
-        let system: Vec<AsrSegment> = read_json(&self.layout.asr_cache_json(id, Track::System)).unwrap_or_default();
+        let mut mic: Vec<AsrSegment> = read_json(&self.layout.asr_cache_json(id, Track::Mic)).unwrap_or_default();
+        let mut system: Vec<AsrSegment> = read_json(&self.layout.asr_cache_json(id, Track::System)).unwrap_or_default();
+        // La caché ASR queda cruda: el glosario se aplica aquí, así que
+        // reprocesar el paso con un glosario nuevo basta.
+        glossary::apply(&mut mic, &self.settings.transcription.glossary);
+        glossary::apply(&mut system, &self.settings.transcription.glossary);
         let diarization: Option<DiarizationResult> = read_json(&self.layout.diarization_cache_json(id));
         let signals: Vec<SpeakerSignal> = read_jsonl(&self.layout.live_speakers_path(id));
         let active = read_manifest(&self.layout, id)
@@ -307,6 +341,7 @@ impl DefaultPipeline {
             }
         }
         let previous = self.store.get_transcript(id).await?;
+        let levels = self.track_levels(id).await;
         let mut transcript = merge_transcript(
             id,
             MergeInput {
@@ -317,10 +352,72 @@ impl DefaultPipeline {
                 self_names: self_names.clone(),
                 voiceprints,
                 previous,
+                levels,
             },
         );
+        self.clean_with_llm(&mut transcript).await;
         self.names_from_conversation(&mut transcript, self_names, participants).await;
         self.store.save_transcript(transcript).await
+    }
+
+    /// Pasada del LLM sobre el texto de cada intervención (jerga mal oída con el
+    /// glosario, puntuación, mayúsculas). Corre sobre el transcript ya fusionado
+    /// —solo lo que de verdad se queda, no el bleed descartado— y ANTES del acta.
+    ///
+    /// Solo cambia `text`: ni hablantes, ni tiempos, ni número de intervenciones.
+    /// Nunca hace fallar el paso: lo que no se limpia se queda crudo y no se
+    /// cachea (el siguiente procesado lo reintenta). Lo limpiado se cachea por
+    /// texto, así que reprocesar solo pide al LLM lo nuevo.
+    async fn clean_with_llm(&self, transcript: &mut Transcript) {
+        let Some(cleaner) = &self.cleaner else { return };
+        if !self.settings.transcription.llm_cleanup || transcript.utterances.is_empty() {
+            return;
+        }
+        let language = acta_core::settings::language::normalize(&self.settings.transcription.language);
+        let mut glossary: Vec<String> =
+            self.settings.transcription.glossary.iter().map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()).collect();
+        glossary.sort();
+        glossary.dedup();
+        let fingerprint = format!("{}|{language}|{}", cleaner.version(), glossary.join(","));
+
+        let path = self.layout.cleanup_cache_json(transcript.meeting_id);
+        let mut cache = read_json::<CleanupCache>(&path).filter(|c| c.fingerprint == fingerprint).unwrap_or_default();
+        cache.fingerprint = fingerprint;
+
+        let mut missing: Vec<String> = Vec::new();
+        for u in &transcript.utterances {
+            if !cache.entries.contains_key(&u.text) && !missing.contains(&u.text) {
+                missing.push(u.text.clone());
+            }
+        }
+        let mut dirty = false;
+        if !missing.is_empty() {
+            let cleaned = cleaner.clean(CleanupInput { texts: missing.clone(), glossary, language }).await;
+            if cleaned.len() == missing.len() {
+                for (raw, c) in missing.into_iter().zip(cleaned) {
+                    if let Some(c) = c {
+                        cache.entries.insert(raw, c);
+                        dirty = true;
+                    }
+                }
+            } else {
+                tracing::warn!(pedidos = missing.len(), devueltos = cleaned.len(), "limpieza del transcript: número de textos distinto; se ignora");
+            }
+        }
+        // La caché solo guarda lo que este transcript usa.
+        let used: std::collections::HashSet<&str> = transcript.utterances.iter().map(|u| u.text.as_str()).collect();
+        let before = cache.entries.len();
+        cache.entries.retain(|raw, _| used.contains(raw.as_str()));
+        if dirty || cache.entries.len() != before {
+            if let Err(e) = write_json(&path, &cache) {
+                tracing::warn!("no se pudo guardar la caché de limpieza: {e}");
+            }
+        }
+        for u in &mut transcript.utterances {
+            if let Some(c) = cache.entries.get(&u.text) {
+                u.text.clone_from(c);
+            }
+        }
     }
 
     /// Último recurso para los "Speaker N": el nombre que se dice en la
@@ -422,6 +519,7 @@ impl DefaultPipeline {
             utterances: transcript.utterances,
             captures: refs,
             language: acta_core::settings::language::normalize(&self.settings.transcription.language),
+            user_note: meeting.user_note.clone(),
         };
         let output: MinutesOutput = self.minutes.generate(input).await?;
         write_json(&self.layout.minutes_json(id), &output)?;

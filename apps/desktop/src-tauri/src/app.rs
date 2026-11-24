@@ -359,6 +359,21 @@ impl AppCore {
         Ok(m)
     }
 
+    /// Nota personal del usuario ("nota para mí"). En blanco la borra.
+    pub async fn meeting_set_note(&self, id: MeetingId, note: String) -> PortResult<Meeting> {
+        let note = Some(note.trim().to_owned()).filter(|n| !n.is_empty());
+        let m = self
+            .store
+            .patch_meeting(id, MeetingPatch { user_note: Some(note), ..MeetingPatch::default() })
+            .await
+            .map_err(|e| match e {
+                PortError::NotFound(_) => PortError::NotFound("No existe esa reunión.".into()),
+                other => other,
+            })?;
+        self.emit(event_names::MEETING_UPDATED, &MeetingUpdated { meeting_id: id, status: m.status, title: m.title.clone() });
+        Ok(m)
+    }
+
     fn recording_meeting(state: &SessionState) -> Option<MeetingId> {
         match state {
             SessionState::Recording(r) => Some(r.meeting_id),

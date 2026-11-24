@@ -63,6 +63,7 @@ pub(crate) fn frame_from_wire(f: ScreenFrameEvent) -> CapturedFrame {
         width: f.width,
         height: f.height,
         keyword: f.keyword,
+        thumb: f.thumb,
     }
 }
 

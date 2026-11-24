@@ -1,15 +1,21 @@
 //! Fusión del transcript (docs/01-arquitectura.md §6.4). Lógica PURA.
 //!
-//! - Pista `mic` → "Yo".
+//! - Pista `mic` → "Yo", salvo el bleed: lo que el micro oye de los altavoces
+//!   (el remoto sonando en la sala) NO es "Yo". Un segmento `mic` solo es
+//!   "Yo" si no lo explica el audio `system` de la misma ventana (ver
+//!   `resolve_bleed`): la misma frase en ambas pistas se queda con la del
+//!   sistema salvo que el micro domine con claridad (+6 dB sobre el sistema).
 //! - Pista `system` → cada segmento ASR va al turno de diarización con mayor
 //!   solape (o al más cercano si no solapa ninguno).
 //! - Nombre de cada hablante diarizado, por orden: nombre confirmado antes
 //!   por el usuario (reprocesado) > huella de voz > hablante activo de Teams
 //!   con mayor solape > "Speaker N" (luego `DefaultPipeline` pide al
 //!   `SpeakerNamer` el nombre que se dice en la reunión para los genéricos).
-//! - Eco: segmentos `system` que solapan ≥ 80 % con uno `mic` de texto casi
-//!   igual se descartan (la voz del usuario saliendo por los altavoces).
+//! - Duplicados: mismo tramo + texto parecido en `mic` y `system` → se queda
+//!   uno. Si el micro domina, es la voz del usuario saliendo por los altavoces
+//!   (se descarta el `system`); si no, es bleed (se descarta el `mic`).
 
+use super::energy::TrackLevels;
 use acta_core::ids::{MeetingId, SpeakerId, VoiceprintId};
 use acta_core::recording::Track;
 use acta_core::time::MediaMs;
@@ -36,12 +42,25 @@ pub struct MergeInput {
     pub voiceprints: HashMap<String, (VoiceprintId, String)>,
     /// Transcript anterior (reprocesado): conserva ids y nombres confirmados.
     pub previous: Option<Transcript>,
+    /// Energía de ambas pistas: sin ella no se sabe si el micro domina y los
+    /// duplicados se resuelven a favor del sistema.
+    pub levels: Option<TrackLevels>,
 }
 
 /// Solape mínimo con el hablante activo de Teams para ponerle su nombre.
 const MIN_UI_OVERLAP_MS: u64 = 1_000;
-const ECHO_OVERLAP: f64 = 0.8;
-const ECHO_TEXT_SIMILARITY: f64 = 0.8;
+/// Solape (sobre el segmento más corto) y parecido de texto para llamar
+/// "gemelos" a un segmento `mic` y otro `system`. El bleed llega distorsionado,
+/// así que el parecido es más laxo que para un eco limpio.
+const TWIN_OVERLAP: f64 = 0.5;
+const TWIN_TEXT_SIMILARITY: f64 = 0.6;
+/// El micro domina (voz propia) si supera al sistema en al menos esto (dB).
+const MIC_DOMINANT_DB: f32 = 6.0;
+/// Sin gemelo: el segmento `mic` es bleed si el sistema suena y el micro va
+/// al menos esto por debajo (dB).
+const BLEED_ONLY_DB: f32 = -12.0;
+/// Por debajo de este nivel el sistema cuenta como callado.
+const SYSTEM_ACTIVE_DB: f32 = -50.0;
 
 fn overlap(a0: u64, a1: u64, b0: u64, b1: u64) -> u64 {
     a1.min(b1).saturating_sub(a0.max(b0))
@@ -67,12 +86,55 @@ fn similarity(a: &str, b: &str) -> f64 {
     inter / union
 }
 
-fn is_echo(seg: &AsrSegment, mic: &[AsrSegment]) -> bool {
-    let len = seg.end_ms.saturating_sub(seg.start_ms).max(1);
-    mic.iter().any(|m| {
-        let ov = overlap(seg.start_ms, seg.end_ms, m.start_ms, m.end_ms);
-        ov as f64 / len as f64 >= ECHO_OVERLAP && similarity(&seg.text, &m.text) >= ECHO_TEXT_SIMILARITY
-    })
+fn are_twins(a: &AsrSegment, b: &AsrSegment) -> bool {
+    let shorter = a.end_ms.saturating_sub(a.start_ms).min(b.end_ms.saturating_sub(b.start_ms)).max(1);
+    let ov = overlap(a.start_ms, a.end_ms, b.start_ms, b.end_ms);
+    ov as f64 / shorter as f64 >= TWIN_OVERLAP && similarity(&a.text, &b.text) >= TWIN_TEXT_SIMILARITY
+}
+
+/// ¿El micro suena claramente por encima del sistema en el tramo del segmento?
+/// Sin niveles no se puede afirmar.
+fn mic_dominates(seg: &AsrSegment, levels: Option<&TrackLevels>) -> bool {
+    levels
+        .and_then(|l| l.window(seg.start_ms, seg.end_ms))
+        .is_some_and(|w| w.mic_over_system() >= MIC_DOMINANT_DB)
+}
+
+/// Segmento `mic` sin gemelo en el sistema que aun así es el remoto colándose:
+/// el sistema suena y el micro va muy por debajo.
+fn is_bleed_only(seg: &AsrSegment, levels: Option<&TrackLevels>) -> bool {
+    levels
+        .and_then(|l| l.window(seg.start_ms, seg.end_ms))
+        .is_some_and(|w| w.system_db > SYSTEM_ACTIVE_DB && w.mic_over_system() <= BLEED_ONLY_DB)
+}
+
+/// Resuelve el bleed y los duplicados: devuelve los segmentos `mic` que
+/// siguen siendo "Yo" y los `system` que se mantienen.
+fn resolve_bleed<'a>(
+    mic: &'a [AsrSegment],
+    system: Vec<&'a AsrSegment>,
+    levels: Option<&TrackLevels>,
+) -> (Vec<&'a AsrSegment>, Vec<&'a AsrSegment>) {
+    let mut drop_system: HashSet<usize> = HashSet::new();
+    let mut keep_mic = Vec::new();
+    for m in mic {
+        let twins: Vec<usize> = system.iter().enumerate().filter(|(_, s)| are_twins(m, s)).map(|(i, _)| i).collect();
+        if twins.is_empty() {
+            if !is_bleed_only(m, levels) {
+                keep_mic.push(m);
+            }
+        } else if mic_dominates(m, levels) {
+            drop_system.extend(twins);
+            keep_mic.push(m);
+        }
+    }
+    let keep_system = system
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| !drop_system.contains(i))
+        .map(|(_, s)| s)
+        .collect();
+    (keep_mic, keep_system)
 }
 
 fn names_eq(a: &str, b: &str) -> bool {
@@ -146,8 +208,11 @@ pub fn merge_transcript(meeting_id: MeetingId, input: MergeInput) -> Transcript 
     let mut speakers: Vec<Speaker> = Vec::new();
     let mut utterances: Vec<Utterance> = Vec::new();
 
+    let system_all: Vec<&AsrSegment> = input.system.iter().filter(|s| !s.text.trim().is_empty()).collect();
+    let (mic_kept, system) = resolve_bleed(&input.mic, system_all, input.levels.as_ref());
+
     // --- Yo ---
-    if !input.mic.is_empty() {
+    if !mic_kept.is_empty() {
         let me = prev_for(Track::Mic, None);
         let id = me.as_ref().map_or_else(SpeakerId::new, |s| s.id);
         speakers.push(Speaker {
@@ -162,17 +227,12 @@ pub fn merge_transcript(meeting_id: MeetingId, input: MergeInput) -> Transcript 
             confirmed: me.as_ref().is_some_and(|s| s.confirmed),
             voiceprint_id: None,
         });
-        for s in &input.mic {
+        for s in &mic_kept {
             utterances.push(utt(id, Track::Mic, s));
         }
     }
 
     // --- Otros ---
-    let system: Vec<&AsrSegment> = input
-        .system
-        .iter()
-        .filter(|s| !s.text.trim().is_empty() && !is_echo(s, &input.mic))
-        .collect();
     let diar = input.diarization.as_ref().filter(|d| !d.turns.is_empty());
     let assigned: Vec<(Option<String>, &AsrSegment)> = system
         .iter()
@@ -313,20 +373,100 @@ mod tests {
         assert_eq!((s1.display_name.as_deref(), s1.name_source), (Some("Luis"), NameSource::AppUi));
     }
 
+    use super::super::energy::TrackLevels;
+
     #[test]
-    fn echo_of_my_voice_on_system_is_dropped() {
+    fn echo_of_my_voice_on_system_is_dropped_when_the_mic_dominates() {
         let t = merge_transcript(
             MeetingId::from_u128(1),
             MergeInput {
                 mic: vec![seg(0, 2_000, "vamos a revisar el plan")],
                 system: vec![seg(100, 2_000, "Vamos a revisar el plan."), seg(2_500, 3_000, "vale")],
+                levels: Some(TrackLevels::constant(-25.0, -50.0, 4_000)),
                 ..MergeInput::default()
             },
         );
         let texts: Vec<_> = t.utterances.iter().map(|u| u.text.as_str()).collect();
         assert_eq!(texts, vec!["vamos a revisar el plan", "vale"]);
-        // Sin diarización: un único "Speaker 1".
         assert_eq!(t.speakers.iter().filter(|s| !s.is_me).count(), 1);
+    }
+
+    #[test]
+    fn speaker_bleed_on_mic_is_not_me_the_remote_attribution_wins() {
+        // Edu muteado con altavoces: el micro solo oye, bajito, lo que dice el remoto.
+        let t = merge_transcript(
+            MeetingId::from_u128(1),
+            MergeInput {
+                mic: vec![seg(0, 2_000, "vamos a revisar el plan")],
+                system: vec![seg(0, 2_000, "Vamos a revisar el plan.")],
+                diarization: Some(diar(vec![turn("S0", 0, 2_000)])),
+                levels: Some(TrackLevels::constant(-50.0, -20.0, 3_000)),
+                ..MergeInput::default()
+            },
+        );
+        assert_eq!(t.utterances.len(), 1);
+        let who = name_of(&t, &t.utterances[0]);
+        assert!(!who.is_me);
+        assert_eq!(t.utterances[0].track, Track::System);
+        assert!(t.speakers.iter().all(|s| !s.is_me), "sin voz propia no hay hablante «Yo»");
+    }
+
+    #[test]
+    fn duplicate_phrase_without_levels_prefers_the_system_speaker() {
+        let t = merge_transcript(
+            MeetingId::from_u128(1),
+            MergeInput {
+                mic: vec![seg(0, 2_000, "vamos a revisar el plan")],
+                system: vec![seg(50, 2_100, "vamos a revisar el plan")],
+                ..MergeInput::default()
+            },
+        );
+        assert_eq!(t.utterances.len(), 1);
+        assert_eq!(t.utterances[0].track, Track::System);
+    }
+
+    #[test]
+    fn bleed_transcribed_differently_is_dropped_when_far_below_the_system() {
+        let t = merge_transcript(
+            MeetingId::from_u128(1),
+            MergeInput {
+                mic: vec![seg(0, 2_000, "bamos arrevisar el plan")],
+                system: vec![seg(0, 2_000, "ya vamos a revisar los números del plan de ventas")],
+                levels: Some(TrackLevels::constant(-55.0, -25.0, 3_000)),
+                ..MergeInput::default()
+            },
+        );
+        assert!(t.utterances.iter().all(|u| u.track == Track::System));
+        assert!(t.speakers.iter().all(|s| !s.is_me));
+    }
+
+    #[test]
+    fn my_real_speech_over_silent_system_stays_me() {
+        let t = merge_transcript(
+            MeetingId::from_u128(1),
+            MergeInput {
+                mic: vec![seg(0, 2_000, "buenos días a todos")],
+                system: vec![seg(5_000, 6_000, "hola")],
+                levels: Some(TrackLevels::constant(-30.0, -90.0, 7_000)),
+                ..MergeInput::default()
+            },
+        );
+        assert!(t.utterances.iter().any(|u| name_of(&t, u).is_me && u.text == "buenos días a todos"));
+    }
+
+    #[test]
+    fn my_speech_over_a_talking_remote_stays_me_when_the_mic_is_not_far_below() {
+        let t = merge_transcript(
+            MeetingId::from_u128(1),
+            MergeInput {
+                mic: vec![seg(0, 2_000, "perdona que te interrumpa")],
+                system: vec![seg(0, 2_000, "entonces el presupuesto del trimestre")],
+                levels: Some(TrackLevels::constant(-28.0, -26.0, 3_000)),
+                ..MergeInput::default()
+            },
+        );
+        assert_eq!(t.utterances.len(), 2);
+        assert!(t.utterances.iter().any(|u| name_of(&t, u).is_me));
     }
 
     #[test]

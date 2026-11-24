@@ -137,6 +137,10 @@ pub struct MinutesInput {
     pub captures: Vec<CaptureRef>,
     /// Idioma de salida: `"auto"` (el que se habla en la reunión) o ISO 639-1 ("es").
     pub language: String,
+    /// Nota personal del usuario sobre la reunión: contexto privado, no la
+    /// dijo nadie.
+    #[serde(default)]
+    pub user_note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

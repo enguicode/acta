@@ -193,3 +193,15 @@ pub struct SpeakerNameGuess {
     pub name: String,
     pub evidence: String,
 }
+
+/// Lo que recibe un `TranscriptCleaner`: los textos de las intervenciones, en
+/// orden, y las pistas para corregirlos.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CleanupInput {
+    /// Un texto por intervención; el resultado conserva el orden y el número.
+    pub texts: Vec<String>,
+    /// Jerga y nombres propios del usuario (`transcription.glossary`).
+    pub glossary: Vec<String>,
+    /// `"auto"` o código ISO 639-1: el idioma en que se habló (no se traduce).
+    pub language: String,
+}

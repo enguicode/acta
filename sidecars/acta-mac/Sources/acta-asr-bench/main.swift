@@ -43,6 +43,20 @@ case "parakeet", "parakeet-es":
     var state = TdtDecoderState.make(decoderLayers: await mgr.decoderLayerCount)
     let r = try await mgr.transcribe(audio, decoderState: &state, language: engine == "parakeet-es" ? .spanish : nil)
     text = r.text
+case "vad":
+    // Diagnóstico: probabilidades de Silero por bloque de 256 ms y tramos (config de Orca).
+    let vad = try await VadManager(config: .default, modelDirectory: base)
+    let results = try await vad.process(audio)
+    let probs = results.map { String(format: "%.2f", $0.probability) }.joined(separator: " ")
+    let env = ProcessInfo.processInfo.environment
+    let neg = Float(env["VAD_NEG"] ?? "") ?? 0.7
+    let sil = Double(env["VAD_SIL"] ?? "") ?? 0.5
+    let segs = await vad.segmentSpeech(from: results, totalSamples: audio.count, config: VadSegmentationConfig(
+        minSpeechDuration: 0.25, minSilenceDuration: sil, maxSpeechDuration: 13.5, speechPadding: 0,
+        silenceThresholdForSplit: neg, negativeThreshold: neg, negativeThresholdOffset: 0.15))
+    print(probs)
+    print(segs.map { String(format: "%.2f-%.2f", $0.startTime, $0.endTime) }.joined(separator: " "))
+    exit(0)
 case "nemotron-es", "nemotron-auto":
     let lang = engine == "nemotron-es" ? "es-ES" : "auto"
     let shared = try await StreamingNemotronMultilingualAsrManager.downloadAndPreloadShared(

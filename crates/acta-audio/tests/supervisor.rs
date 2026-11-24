@@ -196,7 +196,8 @@ async fn screen_frames_are_renamed_to_media_time_and_linked() {
     rig.screen.push(ScreenEvent::ShareStarted { presenter: Some("Ana".into()), at: T0.plus_ms(1_000) });
     let frame = rig.screen.write_frame(id, T0.plus_ms(1_500), CaptureReason::SlideChange);
     rig.screen.push(ScreenEvent::FrameSaved { frame: frame.clone() });
-    let cand = rig.screen.write_frame(id, T0.plus_ms(1_600), CaptureReason::Candidate);
+    let mut cand = rig.screen.write_frame(id, T0.plus_ms(1_600), CaptureReason::Candidate);
+    cand.phash = "fedcba9876543210".into();
     rig.screen.push(ScreenEvent::FrameSaved { frame: cand });
     let ev = wait_for(&mut rx, |e| matches!(e, SupervisorEvent::CaptureSaved(_))).await;
     let SupervisorEvent::CaptureSaved(c) = ev else { unreachable!() };
@@ -212,6 +213,67 @@ async fn screen_frames_are_renamed_to_media_time_and_linked() {
     assert_eq!(cands[0].path, "captures/candidates/1700000001600.jpg");
     let live = std::fs::read_to_string(rig.layout.live_screen_path(id)).unwrap();
     assert!(live.contains("shareStarted"));
+}
+
+/// Real (23-nov-2026): demasiadas capturas aunque nadie compartiera pantalla.
+/// Sin compartición solo valen las que pide una persona; las casi iguales a
+/// la última conservada se descartan (y su fichero se borra).
+#[tokio::test]
+async fn automatic_captures_are_dropped_unless_someone_shares_and_the_frame_changed() {
+    let rig = Rig::new();
+    let mut settings = Settings::default();
+    settings.screen.enabled = true;
+    let h = start(&rig, settings).await;
+    let mut rx = h.subscribe();
+    let id = detect_and_accept(&rig, &h, &mut rx).await;
+
+    let idle = rig.screen.write_frame(id, T0.plus_ms(1_000), CaptureReason::SlideChange);
+    rig.screen.push(ScreenEvent::FrameSaved { frame: idle.clone() });
+    let manual = rig.screen.write_frame(id, T0.plus_ms(2_000), CaptureReason::Manual);
+    rig.screen.push(ScreenEvent::FrameSaved { frame: manual });
+    wait_for(&mut rx, |e| matches!(e, SupervisorEvent::CaptureSaved(_))).await;
+    assert!(!idle.path.exists(), "la descartada se borra");
+    assert_eq!(rig.store.captures.lock().unwrap().len(), 1);
+
+    rig.screen.push(ScreenEvent::ShareStarted { presenter: None, at: T0.plus_ms(3_000) });
+    let slide = rig.screen.write_frame(id, T0.plus_ms(20_000), CaptureReason::SlideChange);
+    rig.screen.push(ScreenEvent::FrameSaved { frame: slide });
+    let same = rig.screen.write_frame(id, T0.plus_ms(40_000), CaptureReason::SlideChange);
+    rig.screen.push(ScreenEvent::FrameSaved { frame: same.clone() });
+    eventually(|| rig.store.captures.lock().unwrap().len() == 2).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(rig.store.captures.lock().unwrap().len(), 2, "casi duplicada");
+    assert!(!same.path.exists());
+}
+
+/// Compartiendo: una diapositiva distinta pero a menos de 8 s de la anterior
+/// se descarta (animaciones, transiciones); pasados los 8 s se conserva.
+#[tokio::test]
+async fn slide_changes_closer_than_eight_seconds_are_dropped_through_the_actor() {
+    let rig = Rig::new();
+    let mut settings = Settings::default();
+    settings.screen.enabled = true;
+    let h = start(&rig, settings).await;
+    let mut rx = h.subscribe();
+    let id = detect_and_accept(&rig, &h, &mut rx).await;
+    rig.screen.push(ScreenEvent::ShareStarted { presenter: None, at: T0.plus_ms(500) });
+
+    let frame = |at: u64, hash: &str| {
+        let mut f = rig.screen.write_frame(id, T0.plus_ms(at as i64), CaptureReason::SlideChange);
+        f.phash = hash.into();
+        f
+    };
+    let first = frame(10_000, "0000000000000000");
+    rig.screen.push(ScreenEvent::FrameSaved { frame: first });
+    eventually(|| rig.store.captures.lock().unwrap().len() == 1).await;
+    let too_soon = frame(13_000, "ffffffffffffffff");
+    rig.screen.push(ScreenEvent::FrameSaved { frame: too_soon.clone() });
+    let later = frame(18_500, "ffffffffffffffff");
+    rig.screen.push(ScreenEvent::FrameSaved { frame: later });
+    eventually(|| rig.store.captures.lock().unwrap().len() == 2).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(rig.store.captures.lock().unwrap().len(), 2, "la de +3 s sobra, la de +8,5 s entra");
+    assert!(!too_soon.path.exists());
 }
 
 /// Real (19-nov-2026): las grabaciones manuales (sin app detectada) no
@@ -256,6 +318,7 @@ async fn denied_screen_capture_is_retried_and_the_warning_clears_when_it_works()
     assert_eq!(*rig.screen.attempts.lock().unwrap(), 3);
     assert!(h.health().await.unwrap().iter().all(|w| !is_screen(w)), "ya no sale en la pastilla");
     // Y las capturas llegan.
+    rig.screen.push(ScreenEvent::ShareStarted { presenter: None, at: T0.plus_ms(22_000) });
     let frame = rig.screen.write_frame(id, T0.plus_ms(23_000), CaptureReason::SlideChange);
     rig.screen.push(ScreenEvent::FrameSaved { frame });
     wait_for(&mut rx, |e| matches!(e, SupervisorEvent::CaptureSaved(_))).await;

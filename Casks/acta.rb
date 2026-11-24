@@ -1,6 +1,6 @@
 cask "acta" do
-  version "0.1.2"
-  sha256 "20d18009a7b28b2f08832c95639274b199353cde9db70d0afd3903ea96d76a2e"
+  version "0.1.3"
+  sha256 "6c7a6ee0647da2ba5c2f71d2fe319c39d475a8d292312767ac9917e2d0a5485f"
 
   url "https://github.com/edunavajas/acta/releases/download/v#{version}/acta-#{version}-macos-arm64.zip"
   name "acta"

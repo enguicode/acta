@@ -50,6 +50,8 @@
 .step-time { font-weight: 500; opacity: 0.75; }
 @keyframes step-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 .notice-llm { margin-top: 4px; font-size: var(--t-caption); font-weight: 600; color: var(--fg-2); }
+.meeting-note { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.meeting-note label { font-size: var(--t-small); font-weight: 600; color: var(--fg-2); }
 .provisional-note { padding: 10px 14px; border-radius: var(--r-card); background: var(--accent-softer); box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--accent) 18%, transparent); color: var(--fg-2); font-size: var(--t-small); line-height: 1.45; }
 .lines-card { padding: 0; }
 .card-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }

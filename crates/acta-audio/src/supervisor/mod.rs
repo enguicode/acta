@@ -15,6 +15,7 @@
 
 mod actor;
 mod capture;
+mod gate;
 pub mod files;
 mod queue;
 

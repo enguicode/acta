@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "acta-audio"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "acta-core",
  "acta-store",
@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "acta-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "futures",
@@ -36,7 +36,7 @@ dependencies = [
 
 [[package]]
 name = "acta-desktop"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "acta-audio",
  "acta-core",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "acta-llm"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "acta-core",
  "async-trait",
@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "acta-mac-bridge"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "acta-core",
  "async-trait",
@@ -103,7 +103,7 @@ dependencies = [
 
 [[package]]
 name = "acta-store"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "acta-core",
  "async-trait",

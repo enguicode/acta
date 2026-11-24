@@ -57,6 +57,127 @@ enum DHash {
     static func hex(_ h: UInt64) -> String { String(format: "%016llx", h) }
 }
 
+/// Firma de contenido: miniatura gris 64×36.
+/// El dHash 9×8 no distingue dos diapositivas con la misma plantilla y poco
+/// texto (1-3 bits, igual que el ruido); aquí se mira DÓNDE cambia la imagen:
+/// un cambio de diapositiva toca muchas baldosas repartidas por la pantalla,
+/// el ruido (cursor, reloj, miniatura de vídeo en una esquina) solo unas pocas
+/// juntas. Mismo algoritmo en Rust (`acta-audio` `supervisor/gate.rs`).
+enum SlideThumb {
+    static let cols = 64
+    static let rows = 36
+    /// Salto de gris (0-255) de una celda que cuenta como "cambió"
+    /// (suavizado y JPEG mueven 1-6).
+    static let cellDelta = 10
+    /// Un grupo de celdas cambiadas contiguas es una "superposición" (puntero,
+    /// miniatura de vídeo, imagen que se mueve) si cabe en una esquina
+    /// (≤ 25 % del ancho y del alto) y está casi relleno: no cuenta.
+    /// El texto que cambia es disperso: celdas sueltas dentro de su caja.
+    static let overlayMaxCols = 16
+    static let overlayMaxRows = 9
+    static let overlayFill = 0.5
+    /// Celdas cambiadas (fuera de superposiciones) y columnas distintas mínimas.
+    static let minCells = 6
+    static let minColumns = 5
+    /// Cambio global de luminosidad media que basta solo (fondo/plantilla).
+    static let meanDelta = 12.0
+
+    struct Diff: Equatable {
+        /// Todas las celdas que cambiaron.
+        var changedCells: Int
+        /// Las que quedan sin las superposiciones.
+        var cells: Int
+        var columns: Int
+        var meanDelta: Double
+
+        var isSlideChange: Bool {
+            if meanDelta >= SlideThumb.meanDelta { return true }
+            return cells >= SlideThumb.minCells && columns >= SlideThumb.minColumns
+        }
+    }
+
+    /// 2304 bytes: se dibuja a 256×144 y se promedian bloques de 4×4.
+    static func make(_ image: CGImage) -> [UInt8]? {
+        let w = cols * 4, h = rows * 4
+        var px = [UInt8](repeating: 0, count: w * h)
+        let ok: Bool = px.withUnsafeMutableBytes { buf in
+            guard let ctx = CGContext(
+                data: buf.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue
+            ) else { return false }
+            ctx.interpolationQuality = .high
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard ok else { return nil }
+        var out = [UInt8](repeating: 0, count: cols * rows)
+        for ty in 0..<rows {
+            for tx in 0..<cols {
+                var sum = 0
+                for y in 0..<4 { for x in 0..<4 { sum += Int(px[(ty * 4 + y) * w + tx * 4 + x]) } }
+                out[ty * cols + tx] = UInt8(sum / 16)
+            }
+        }
+        return out
+    }
+
+    static func compare(_ a: [UInt8], _ b: [UInt8], cellDelta: Int = SlideThumb.cellDelta) -> Diff {
+        guard a.count == cols * rows, b.count == a.count else { return Diff(changedCells: 0, cells: 0, columns: 0, meanDelta: 0) }
+        var changed = [Bool](repeating: false, count: a.count)
+        var total = 0, sumA = 0, sumB = 0
+        for i in 0..<a.count {
+            sumA += Int(a[i]); sumB += Int(b[i])
+            if abs(Int(a[i]) - Int(b[i])) >= cellDelta { changed[i] = true; total += 1 }
+        }
+        // Grupos de celdas contiguas (8 vecinas): las superposiciones se descartan.
+        var seen = [Bool](repeating: false, count: a.count)
+        var kept = 0
+        var colSet: UInt64 = 0
+        for start in 0..<a.count where changed[start] && !seen[start] {
+            var stack = [start]
+            seen[start] = true
+            var members: [Int] = []
+            var minX = cols, maxX = 0, minY = rows, maxY = 0
+            while let i = stack.popLast() {
+                members.append(i)
+                let x = i % cols, y = i / cols
+                minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+                for dy in -1...1 {
+                    for dx in -1...1 {
+                        let nx = x + dx, ny = y + dy
+                        guard nx >= 0, nx < cols, ny >= 0, ny < rows else { continue }
+                        let j = ny * cols + nx
+                        if changed[j], !seen[j] { seen[j] = true; stack.append(j) }
+                    }
+                }
+            }
+            let w = maxX - minX + 1, h = maxY - minY + 1
+            let fill = Double(members.count) / Double(w * h)
+            if w <= overlayMaxCols, h <= overlayMaxRows, fill >= overlayFill { continue }
+            kept += members.count
+            for i in members { colSet |= 1 << UInt64(i % cols) }
+        }
+        return Diff(
+            changedCells: total, cells: kept, columns: colSet.nonzeroBitCount,
+            meanDelta: abs(Double(sumA - sumB)) / Double(a.count)
+        )
+    }
+
+    static func hex(_ t: [UInt8]) -> String { t.map { String(format: "%02x", $0) }.joined() }
+
+    static func parse(_ s: String) -> [UInt8]? {
+        guard s.utf8.count == cols * rows * 2 else { return nil }
+        var out: [UInt8] = []
+        out.reserveCapacity(cols * rows)
+        var it = s.utf8.makeIterator()
+        while let hi = it.next(), let lo = it.next() {
+            guard let v = UInt8(String(decoding: [hi, lo], as: UTF8.self), radix: 16) else { return nil }
+            out.append(v)
+        }
+        return out
+    }
+}
+
 /// Decide cuándo un frame es una diapositiva nueva.
 struct SlideChangeDetector {
     let threshold: Int
@@ -64,7 +185,9 @@ struct SlideChangeDetector {
     /// Ruido permitido entre frames "iguales" (compresión, cursor, vídeo pequeño).
     var noise = 3
     private(set) var lastSaved: UInt64?
+    private var lastSavedThumb: [UInt8]?
     private var previous: UInt64?
+    private var previousThumb: [UInt8]?
     private var stableRun = 0
 
     init(threshold: Int, stableFrames: Int) {
@@ -73,29 +196,40 @@ struct SlideChangeDetector {
     }
 
     /// `true` = guardar este frame como `slide_change`.
-    mutating func observe(_ h: UInt64) -> Bool {
-        if let p = previous, DHash.distance(p, h) <= noise {
+    mutating func observe(_ h: UInt64, thumb: [UInt8]? = nil) -> Bool {
+        if let p = previous, !differs(p, previousThumb, h, thumb, limit: noise + 1) {
             stableRun += 1
         } else {
             stableRun = 1
         }
         previous = h
+        previousThumb = thumb
         guard stableRun >= stableFrames else { return false }
-        if let last = lastSaved, DHash.distance(last, h) < threshold { return false }
+        if let last = lastSaved, !differs(last, lastSavedThumb, h, thumb, limit: threshold) { return false }
         lastSaved = h
+        lastSavedThumb = thumb
         return true
+    }
+
+    /// dHash a `limit` bits o más, o firma de baldosas con cambio extendido.
+    private func differs(_ a: UInt64, _ ta: [UInt8]?, _ b: UInt64, _ tb: [UInt8]?, limit: Int) -> Bool {
+        if DHash.distance(a, b) >= limit { return true }
+        if let ta, let tb { return SlideThumb.compare(ta, tb).isSlideChange }
+        return false
     }
 
     /// No llegó frame nuevo en un intervalo: el contenido sigue igual que el
     /// último (ScreenCaptureKit no repite frames sin cambios).
     mutating func observeUnchanged() -> Bool {
         guard let p = previous else { return false }
-        return observe(p)
+        return observe(p, thumb: previousThumb)
     }
 
     mutating func reset() {
         lastSaved = nil
+        lastSavedThumb = nil
         previous = nil
+        previousThumb = nil
         stableRun = 0
     }
 }
@@ -119,6 +253,14 @@ enum ScreenTarget: Equatable, Sendable {
 
     init(pid: Int32) { self = pid > 0 ? .window(pid: pid) : .display }
 
+    /// ¿Se guardan capturas automáticas (cambio de diapositiva, candidatas)?
+    /// Pantalla entera: nunca, no hay "alguien comparte" (solo el anillo para
+    /// botón/palabra clave). Ventana: salvo que AX diga que no se comparte.
+    func savesAutomaticCaptures(axSharing: Bool?) -> Bool {
+        if case .display = self { return false }
+        return axSharing != false
+    }
+
     /// acta-mac y la app que lo lanzó (acta.app); launchd (1) no.
     static func excludedPids(selfPid: Int32, parentPid: Int32) -> [Int32] {
         parentPid > 1 ? [selfPid, parentPid] : [selfPid]
@@ -139,6 +281,7 @@ struct RingFrame: Sendable {
     var phash: UInt64
     var width: Int
     var height: Int
+    var thumb: [UInt8]? = nil
 }
 
 /// Últimos N segundos de frames (ya en JPEG para no guardar bitmaps).
@@ -179,7 +322,8 @@ enum CaptureFiles {
         try AtomicFile.write(frame.jpeg, to: url)
         return ScreenFrameEvent(
             path: url.path, atUnixMs: frame.atUnixMs, reason: reason, phash: DHash.hex(frame.phash),
-            width: UInt32(frame.width), height: UInt32(frame.height), keyword: keyword
+            width: UInt32(frame.width), height: UInt32(frame.height), keyword: keyword,
+            thumb: frame.thumb.map(SlideThumb.hex)
         )
     }
 }
@@ -547,7 +691,7 @@ public actor ScreenService {
     private func handle(_ box: ImageBox, at: Int64) async {
         guard args != nil else { return }
         guard let jpeg = Jpeg.encode(box.image, quality: 0.8), let h = DHash.hash(box.image) else { return }
-        let frame = RingFrame(atUnixMs: at, jpeg: jpeg, phash: h, width: box.image.width, height: box.image.height)
+        let frame = RingFrame(atUnixMs: at, jpeg: jpeg, phash: h, width: box.image.width, height: box.image.height, thumb: SlideThumb.make(box.image))
         ring.append(frame)
         lastObservedMs = at
         await evaluate(frame, changed: true, lowJpeg: Jpeg.encode(box.image, quality: 0.6))
@@ -557,11 +701,12 @@ public actor ScreenService {
     private func evaluate(_ frame: RingFrame, changed: Bool, lowJpeg: Data?) async {
         guard let a = args else { return }
         let at = frame.atUnixMs
-        // Con AX diciendo "no comparte" no buscamos diapositivas.
-        guard axSharing != false else { return }
-        if changed ? detector.observe(frame.phash) : detector.observeUnchanged() {
-            // En modo pantalla (sin app) no hay "alguien comparte": solo capturas.
-            if !sharing, axSharing == nil, ScreenTarget(pid: a.pid) != .display {
+        // Pantalla entera (sin app): no hay "alguien comparte", así que no se
+        // guardan capturas automáticas (solo el anillo para botón/palabra clave).
+        // Con AX diciendo "no comparte" tampoco se buscan diapositivas.
+        guard ScreenTarget(pid: a.pid).savesAutomaticCaptures(axSharing: axSharing) else { return }
+        if changed ? detector.observe(frame.phash, thumb: frame.thumb) : detector.observeUnchanged() {
+            if !sharing, axSharing == nil {
                 sharing = true
                 await output.emit(.screenShareState(ScreenShareStateEvent(sharing: true, presenter: nil, source: "frame")))
             }

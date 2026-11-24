@@ -267,6 +267,8 @@ Durante la grabación, el supervisor guarda las `SpeakerSignal` (roster y hablan
   3. "Speaker N".
 - `confirmed` solo lo pone el usuario. La huella **solo se aprende** cuando el usuario confirma el nombre (`speaker_rename` con `remember: true`).
 - Eco: las utterances de `system` que se solapan ≥ 80 % con una de `mic` de texto casi igual se descartan.
+- Limpieza con LLM (`transcription.llmCleanup`, encendida de fábrica; solo si hay proveedor): tras la fusión y antes del acta, `TranscriptCleaner` corrige el `text` de cada utterance (jerga con el glosario, puntuación, mayúsculas) en tandas de ≤ 40 segmentos / 6 000 caracteres. La respuesta debe traer los mismos ids en el mismo orden; si no, tiempo agotado o error, esa tanda se queda con el texto crudo y no se cachea. Caché `transcript/cleanup.json` (texto → limpio) invalidada por glosario, idioma y versión del prompt.
+- Troceo del audio para el ASR: el sidecar puntúa la pista con Silero VAD, corta en pausas (≥ 3 bloques de 256 ms por debajo de 0,8; tope 13,5 s cortando en el punto más callado), descarta el silencio y decodifica cada tramo en una pasada con tiempos exactos del fichero. Sin VAD, pista entera como antes (`ACTA_ASR_VAD=0` lo fuerza).
 
 ---
 

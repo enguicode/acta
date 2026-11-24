@@ -195,7 +195,7 @@ impl FakeScreen {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(name);
         std::fs::write(&path, b"jpg").unwrap();
-        CapturedFrame { path, at, reason, phash: "0123456789abcdef".into(), width: 640, height: 360, keyword: None }
+        CapturedFrame { path, at, reason, phash: "0123456789abcdef".into(), width: 640, height: 360, keyword: None, thumb: None }
     }
 }
 #[async_trait]
@@ -239,7 +239,7 @@ impl FakeClipboard {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("{}-manual.jpg", at.0));
         std::fs::write(&path, b"jpg").unwrap();
-        let f = CapturedFrame { path, at, reason: CaptureReason::Manual, phash: "0f0f0f0f0f0f0f0f".into(), width: 800, height: 600, keyword: None };
+        let f = CapturedFrame { path, at, reason: CaptureReason::Manual, phash: "0f0f0f0f0f0f0f0f".into(), width: 800, height: 600, keyword: None, thumb: None };
         lock(&self.tx).as_ref().expect("clipboard started").send(f.clone()).unwrap();
         f
     }
@@ -327,6 +327,7 @@ impl MeetingStore for FakeStore {
             favourite: false,
             error_provider: None,
             error_model: None,
+            user_note: None,
         };
         lock(&self.meetings).insert(m.id, meeting.clone());
         Ok(meeting)

@@ -227,6 +227,7 @@ public actor TranscriptionService {
     private let paths: ModelPaths
     private var asrLoad: Task<(AsrModels, AsrManager), Error>?
     private var diarLoad: Task<OfflineDiarizerModels, Error>?
+    private var vadLoad: Task<VadManager, Error>?
     private var live: [TrackName: LiveAsr] = [:]
 
     public init(output: Output, modelsBase: URL? = nil) {
@@ -261,6 +262,36 @@ public actor TranscriptionService {
         } catch {
             asrLoad = nil
             throw error
+        }
+    }
+
+    private func vad() async throws -> VadManager {
+        if let t = vadLoad { return try await t.value }
+        let base = paths.base
+        let t = Task { try await VadManager(config: .default, modelDirectory: base) }
+        vadLoad = t
+        do {
+            return try await t.value
+        } catch {
+            vadLoad = nil
+            throw error
+        }
+    }
+
+    /// Tramos de habla de la pista (Silero VAD, cortando en pausas). `nil` si el
+    /// VAD no está disponible: se transcribe la pista entera como antes.
+    private func speechSpans(_ wav: URL, duration: Double) async throws -> [SpeechSpan]? {
+        // Interruptor para comparar con el troceo de ventanas fijas (A/B en pruebas).
+        if ProcessInfo.processInfo.environment["ACTA_ASR_VAD"] == "0" { return nil }
+        do {
+            let vad = try await self.vad()
+            let scan = try await SpeechScan.scan(wav, vad: vad)
+            return SpeechPlan.spans(SpeechPlan.regions(probabilities: scan.probs, quiet: scan.quiet, totalSamples: scan.samples), duration: duration)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            Log.warn("asr: VAD unavailable (\(error)); transcribing the whole track")
+            return nil
         }
     }
 
@@ -336,21 +367,40 @@ public actor TranscriptionService {
             if duration >= 0.35 {
                 let (_, mgr) = try await self.asr()
                 try Task.checkCancellation()
-                await self.progress(a.jobId, 0.05, "transcribing")
-                let stream = await mgr.transcriptionProgressStream
-                let reporter = Task {
-                    for try await p in stream { await self.progress(a.jobId, 0.05 + 0.9 * p, "transcribing") }
-                }
-                defer { reporter.cancel() }
-                var state = TdtDecoderState.make(decoderLayers: await mgr.decoderLayerCount)
                 let lang = a.language.flatMap { Language(rawValue: String($0.prefix(2)).lowercased()) }
-                let r = try await mgr.transcribe(wav, decoderState: &state, language: lang)
-                let tokens = (r.tokenTimings ?? []).map {
-                    TimedToken(text: $0.token, start: $0.startTime, end: $0.endTime, confidence: $0.confidence)
+                await self.progress(a.jobId, 0.02, "segmenting")
+                if let spans = try await self.speechSpans(wav, duration: duration) {
+                    let spoken = spans.reduce(0.0) { $0 + Double($1.endMs - $1.startMs) / 1000 }
+                    Log.info("asr: \(spans.count) speech spans (\(Int(spoken)) s of \(Int(duration)) s) in \(wav.lastPathComponent)")
+                    await self.progress(a.jobId, 0.1, "transcribing")
+                    for (i, span) in spans.enumerated() {
+                        try Task.checkCancellation()
+                        let (samples, _) = try WavSpans.read(wav, spans: [SpanMs(startMs: span.startMs, endMs: span.endMs)])
+                        guard !samples.isEmpty else { continue }
+                        var state = TdtDecoderState.make(decoderLayers: await mgr.decoderLayerCount)
+                        let r = try await mgr.transcribe(samples, decoderState: &state, language: lang)
+                        let tokens = (r.tokenTimings ?? []).map {
+                            TimedToken(text: $0.token, start: $0.startTime, end: $0.endTime, confidence: $0.confidence)
+                        }
+                        segments += SpeechPlan.segments(span: span, tokens: tokens, text: r.text, confidence: r.confidence)
+                        await self.progress(a.jobId, 0.1 + 0.85 * Double(i + 1) / Double(spans.count), "transcribing")
+                    }
+                } else {
+                    await self.progress(a.jobId, 0.05, "transcribing")
+                    let stream = await mgr.transcriptionProgressStream
+                    let reporter = Task {
+                        for try await p in stream { await self.progress(a.jobId, 0.05 + 0.9 * p, "transcribing") }
+                    }
+                    defer { reporter.cancel() }
+                    var state = TdtDecoderState.make(decoderLayers: await mgr.decoderLayerCount)
+                    let r = try await mgr.transcribe(wav, decoderState: &state, language: lang)
+                    let tokens = (r.tokenTimings ?? []).map {
+                        TimedToken(text: $0.token, start: $0.startTime, end: $0.endTime, confidence: $0.confidence)
+                    }
+                    segments = tokens.isEmpty
+                        ? AsrMapping.fallbackSegment(text: r.text, duration: duration, confidence: r.confidence)
+                        : AsrMapping.segments(AsrMapping.words(tokens))
                 }
-                segments = tokens.isEmpty
-                    ? AsrMapping.fallbackSegment(text: r.text, duration: duration, confidence: r.confidence)
-                    : AsrMapping.segments(AsrMapping.words(tokens))
             }
             try Task.checkCancellation()
             let file = AsrFile(model: a.model, language: a.language, durationMs: AsrMapping.ms(duration), segments: segments)

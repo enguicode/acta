@@ -20,7 +20,7 @@ use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
 
 const MEETING_COLS: &str =
-    "id,title,platform,app_bundle_id,started_at,ended_at,duration_ms,status,recovered,error,language,created_at,updated_at,favourite,error_provider,error_model";
+    "id,title,platform,app_bundle_id,started_at,ended_at,duration_ms,status,recovered,error,language,created_at,updated_at,favourite,error_provider,error_model,user_note";
 const DEFAULT_LIMIT: u32 = 50;
 const MAX_LIMIT: u32 = 200;
 
@@ -42,6 +42,7 @@ fn meeting_from_row(r: &Row<'_>) -> rusqlite::Result<Meeting> {
         favourite: col_bool(r, 13)?,
         error_provider: r.get(14)?,
         error_model: r.get(15)?,
+        user_note: r.get(16)?,
     })
 }
 
@@ -438,6 +439,10 @@ impl MeetingStore for SqliteStore {
             }
             if let Some(r) = patch.recovered {
                 m.recovered = r;
+            }
+            if let Some(n) = patch.user_note {
+                m.user_note = n;
+                conn.execute("UPDATE meetings SET user_note=?2 WHERE id=?1", params![id.to_string(), m.user_note]).map_err(sql_err)?;
             }
             let clear_llm = matches!(patch.error, Some(None));
             if let Some(e) = patch.error {

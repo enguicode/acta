@@ -5,6 +5,7 @@
 
 use super::capture::{CaptureCore, SharedCore, lock, spawn_pump};
 use super::files::{append_jsonl, place_frame};
+use super::gate::CaptureGate;
 use super::queue::{Queue, spawn_queue};
 use super::{Msg, Request, SupervisorConfig, SupervisorEvent, SupervisorPorts};
 use crate::processing::manifest_duration;
@@ -100,6 +101,7 @@ struct Recording {
     live_on: bool,
     screen_sharing: bool,
     capture_count: u32,
+    gate: CaptureGate,
 }
 
 pub(crate) struct Actor {
@@ -510,6 +512,9 @@ impl Actor {
             ScreenEvent::ShareStarted { .. } | ScreenEvent::ShareEnded { .. } => {
                 let Some(rec) = self.rec.as_mut() else { return };
                 rec.screen_sharing = matches!(event, ScreenEvent::ShareStarted { .. });
+                if rec.screen_sharing {
+                    rec.gate.reset();
+                }
                 let path = self.ports.layout.live_screen_path(rec.meeting_id);
                 if let Err(e) = append_jsonl(&path, &event) {
                     tracing::warn!("no se pudo guardar el estado de pantalla compartida: {e}");
@@ -537,6 +542,10 @@ impl Actor {
     /// Renombra la captura a tiempo media, la guarda y la anuncia.
     async fn save_frame(&mut self, frame: CapturedFrame) -> Option<Capture> {
         let rec = self.rec.as_mut()?;
+        if !rec.gate.admit(frame.reason, frame.at, &frame.phash, frame.thumb.as_deref(), rec.screen_sharing) {
+            let _ = std::fs::remove_file(&frame.path);
+            return None;
+        }
         let at = lock(&rec.core).wall_to_media(frame.at);
         let path = match place_frame(&self.ports.layout, rec.meeting_id, &frame, at) {
             Ok(p) => p,
@@ -734,6 +743,7 @@ impl Actor {
             live_on: false,
             screen_sharing: false,
             capture_count: 0,
+            gate: CaptureGate::new(self.settings.screen.phash_threshold),
         };
 
         let request = CaptureRequest {

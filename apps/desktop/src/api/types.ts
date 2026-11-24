@@ -405,6 +405,8 @@ export interface Meeting {
   /** Si falló el resumen: proveedor y modelo que fallaron (el texto de `error` también los nombra). */
   errorProvider?: string | null;
   errorModel?: string | null;
+  /** Nota personal del usuario («nota para mí»): privada, va al LLM como contexto y sale en el acta en su sección. */
+  userNote?: string | null;
 }
 
 export interface MeetingSummary {
@@ -816,6 +818,9 @@ export interface Settings {
     diarization: boolean;
     livePreview: boolean;
     voiceprintMinSimilarityPct: number;
+    glossary: string[];
+    /** Pasada del LLM sobre el transcript (jerga, puntuación); solo actúa si hay proveedor. */
+    llmCleanup: boolean;
   };
   llm: {
     providers: ProviderConfig[];

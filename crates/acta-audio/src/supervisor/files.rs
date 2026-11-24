@@ -119,6 +119,7 @@ mod tests {
             width: 1280,
             height: 720,
             keyword: None,
+            thumb: None,
         }
     }
 

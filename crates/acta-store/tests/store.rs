@@ -40,6 +40,7 @@ async fn create_get_patch_meeting_uses_injected_clock() {
                 status: Some(MeetingStatus::Failed),
                 recovered: Some(true),
                 error: Some(Some("boom".into())),
+                ..Default::default()
             },
         )
         .await

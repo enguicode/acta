@@ -202,7 +202,7 @@ export function defaultSettings(): T.Settings {
       keywords: ["importante", "apuntad", "esto es clave", "deadline", "fecha"],
       pruneCandidates: true,
     },
-    transcription: { language: "auto", diarization: true, livePreview: true, voiceprintMinSimilarityPct: 75 },
+    transcription: { language: "auto", diarization: true, livePreview: true, voiceprintMinSimilarityPct: 75, glossary: [], llmCleanup: true },
     llm: {
       providers: [
         {
@@ -487,6 +487,11 @@ export function createMockApi(seed: Partial<MockState> = {}): { api: ActaApi; co
     async meetingUpdate(id, title) {
       const m = findMeeting(id);
       m.meeting = { ...m.meeting, title, updatedAt: now() };
+      return m.meeting;
+    },
+    async meetingSetNote(id, note) {
+      const m = findMeeting(id);
+      m.meeting = { ...m.meeting, userNote: note.trim() || null, updatedAt: now() };
       return m.meeting;
     },
     async meetingDelete(id) {

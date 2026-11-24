@@ -635,8 +635,11 @@ public struct ScreenFrameEvent: Codable, Sendable, Equatable {
     public var width: UInt32
     public var height: UInt32
     public var keyword: String?
+    /// Miniatura gris 64×36 en hex (4608 chars): el gate de Rust la
+    /// compara con la de la última captura conservada. Opcional (sidecars viejos).
+    public var thumb: String?
 
-    public init(path: String, atUnixMs: Int64, reason: CaptureReasonName, phash: String, width: UInt32, height: UInt32, keyword: String? = nil) {
+    public init(path: String, atUnixMs: Int64, reason: CaptureReasonName, phash: String, width: UInt32, height: UInt32, keyword: String? = nil, thumb: String? = nil) {
         self.path = path
         self.atUnixMs = atUnixMs
         self.reason = reason
@@ -644,6 +647,7 @@ public struct ScreenFrameEvent: Codable, Sendable, Equatable {
         self.width = width
         self.height = height
         self.keyword = keyword
+        self.thumb = thumb
     }
 }
 

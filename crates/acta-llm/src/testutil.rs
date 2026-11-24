@@ -200,5 +200,6 @@ pub fn sample_input() -> MinutesInput {
             reason: CaptureReason::SlideChange,
         }],
         language: "es".into(),
+        user_note: None,
     }
 }

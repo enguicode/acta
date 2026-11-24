@@ -103,6 +103,19 @@ describe("contract names", () => {
   });
 });
 
+describe("personal note (mock)", () => {
+  it("saves, trims and clears the note", async () => {
+    const { api, controls } = createMockApi();
+    const id = controls.state.meetings[0]!.meeting.id;
+    expect((await api.meetingSetNote(id, "  Pedir descuento  ")).userNote).toBe("Pedir descuento");
+    expect((await api.meetingGet(id)).meeting.userNote).toBe("Pedir descuento");
+    expect((await api.meetingSetNote(id, "  ")).userNote).toBeNull();
+  });
+  it("is in the command contract", () => {
+    expect(COMMANDS.meetingSetNote).toBe("meeting_set_note");
+  });
+});
+
 describe("favourites, cleanup and the built-in local model (mock)", () => {
   it("stars a meeting and a group and filters by favourites", async () => {
     const { api, controls } = createMockApi();

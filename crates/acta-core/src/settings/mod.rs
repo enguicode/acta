@@ -127,6 +127,13 @@ pub struct TranscriptionSettings {
     pub live_preview: bool,
     /// Umbral coseno para reconocer una huella de voz.
     pub voiceprint_min_similarity_pct: u32,
+    /// Jerga/nombres propios que el ASR suele escribir mal (una palabra por
+    /// entrada). Se corrigen a posteriori con coincidencia aproximada.
+    pub glossary: Vec<String>,
+    /// Pasada de limpieza con el LLM sobre el transcript (jerga mal oída,
+    /// puntuación, mayúsculas), con el glosario como pista. Solo actúa si hay un
+    /// proveedor configurado; sin él, la casilla no tiene efecto.
+    pub llm_cleanup: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,6 +253,8 @@ impl Default for TranscriptionSettings {
             diarization: true,
             live_preview: true,
             voiceprint_min_similarity_pct: 75,
+            glossary: Vec::new(),
+            llm_cleanup: true,
         }
     }
 }
@@ -330,6 +339,17 @@ mod tests {
       "cleanup": {"enabled": true, "minAgeDays": 90, "snoozedUntil": null},
       "titles": {"calendar": true}
     }"#;
+
+    /// La limpieza con LLM nace encendida (solo actúa si hay proveedor) y los
+    /// ajustes guardados antes de que existiera la heredan encendida.
+    #[test]
+    fn llm_cleanup_is_on_by_default_and_for_settings_saved_before_it_existed() {
+        assert!(Settings::default().transcription.llm_cleanup);
+        let old: Settings = serde_json::from_str(STORED_BEFORE_NEUTRAL_DEFAULTS).expect("ajustes guardados");
+        assert!(old.transcription.llm_cleanup);
+        let off: TranscriptionSettings = serde_json::from_str(r#"{"llmCleanup": false}"#).expect("json");
+        assert!(!off.llm_cleanup);
+    }
 
     #[test]
     fn settings_stored_before_the_neutral_defaults_load_unchanged() {

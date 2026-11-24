@@ -69,6 +69,19 @@ export function GeneralSection({ user, cleanup, onCleanup, transcription, titles
             ))}
           </Select>
         </Row>
+        <div className="row">
+          <span className="row-text">
+            <span className="row-label">Glosario</span>
+            <span className="row-hint">Jerga, siglas y nombres propios que se transcriben mal (una palabra cada uno). Se corrigen al procesar la reunión. Intro o coma para añadir.</span>
+          </span>
+          <ChipsInput label="Glosario" placeholder="Kubernetes, Jira, Terraform" values={transcription.glossary ?? []} onChange={(glossary) => onTranscription({ ...transcription, glossary })} />
+        </div>
+        <ToggleRow
+          label="Limpiar el transcript con IA"
+          hint="Tu proveedor de IA corrige jerga mal oída (con el glosario), puntuación y mayúsculas, sin cambiar quién habla, cuándo ni el orden. Sin proveedor configurado no hace nada. Envía el texto de la reunión a ese proveedor."
+          checked={transcription.llmCleanup ?? true}
+          onChange={(llmCleanup) => onTranscription({ ...transcription, llmCleanup })}
+        />
         <ToggleRow label="Separar hablantes" hint="Distingue quién habla entre los demás participantes." checked={transcription.diarization} onChange={(diarization) => onTranscription({ ...transcription, diarization })} />
         <ToggleRow label="Transcripción en vivo" hint="Vista previa mientras grabas y detección de momentos importantes." checked={transcription.livePreview} onChange={(livePreview) => onTranscription({ ...transcription, livePreview })} />
       </Group>

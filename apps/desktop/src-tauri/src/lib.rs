@@ -25,6 +25,7 @@ pub mod native;
 pub mod overlay;
 pub mod pipeline;
 pub mod system;
+pub mod instance;
 mod tray;
 pub mod unavailable;
 
@@ -165,6 +166,18 @@ pub fn run() {
         let _ = std::fs::create_dir_all(dir);
     }
     let _log_guard = init_logging(&layout);
+    // Una segunda acta crearía un segundo icono en la barra de menús.
+    let _instance = match instance::InstanceLock::acquire(layout.root()) {
+        instance::Acquire::Owned(lock) => Some(lock),
+        instance::Acquire::AlreadyRunning => {
+            tracing::warn!("acta ya está abierta: se cierra esta segunda instancia");
+            return;
+        }
+        instance::Acquire::Unavailable => {
+            tracing::warn!("no se pudo tomar el candado de instancia única: se arranca sin él");
+            None
+        }
+    };
 
     let positions_file = layout.root().join("overlay-positions.json");
     let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
@@ -255,6 +268,7 @@ pub fn run() {
             commands::meetings_list,
             commands::meeting_get,
             commands::meeting_update,
+            commands::meeting_set_note,
             commands::meeting_delete,
             commands::meeting_set_favourite,
             commands::group_set_favourite,

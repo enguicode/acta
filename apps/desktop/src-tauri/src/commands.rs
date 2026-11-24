@@ -45,6 +45,7 @@ cmd!(capture_manual() -> Option<Capture> => |c| c.capture_manual());
 cmd!(meetings_list(query: MeetingQuery) -> Page<MeetingSummary> => |c| c.meetings_list(query));
 cmd!(meeting_get(id: MeetingId) -> MeetingDetail => |c| c.meeting_get(id));
 cmd!(meeting_update(id: MeetingId, title: String) -> Meeting => |c| c.meeting_update(id, title));
+cmd!(meeting_set_note(id: MeetingId, note: String) -> Meeting => |c| c.meeting_set_note(id, note));
 cmd!(meeting_delete(id: MeetingId) -> () => |c| c.meeting_delete(id));
 cmd!(meeting_set_favourite(id: MeetingId, favourite: bool) -> Meeting => |c| c.meeting_set_favourite(id, favourite));
 cmd!(group_set_favourite(id: GroupId, favourite: bool) -> Group => |c| c.group_set_favourite(id, favourite));

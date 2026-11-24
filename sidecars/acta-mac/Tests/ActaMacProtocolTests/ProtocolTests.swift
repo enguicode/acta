@@ -83,3 +83,12 @@ import Testing
     #expect(payload["reason"] as? String == "manual")
     #expect(payload["at_unix_ms"] as? Int == 1)
 }
+
+@Test func `screen frame carries the optional thumbnail signature`() throws {
+    let ev = ScreenFrameEvent(path: "/m/captures/1-slide_change.jpg", atUnixMs: 1, reason: .slideChange, phash: "00", width: 8, height: 6, thumb: "0a0b")
+    let data = try ProtocolCoding.encoder().encode(ev)
+    let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    #expect(json["thumb"] as? String == "0a0b")
+    let old = try ProtocolCoding.decoder().decode(ScreenFrameEvent.self, from: Data(#"{"path":"/p","at_unix_ms":1,"reason":"manual","phash":"00","width":1,"height":1,"keyword":null}"#.utf8))
+    #expect(old.thumb == nil, "events from older sidecars still decode")
+}

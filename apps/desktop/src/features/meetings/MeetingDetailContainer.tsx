@@ -16,6 +16,7 @@ import { TimelineTab } from "../timeline/TimelineTab";
 import { TranscriptTab } from "../transcript/TranscriptTab";
 import { providerById, providerDisplay, providerModel } from "../chat/providerLabel";
 import { LiveLines } from "../live/LiveLines";
+import { MeetingNote } from "./MeetingNote";
 import { MeetingFilesMenu } from "./MeetingFilesMenu";
 import { ProcessingStatus } from "./ProcessingStatus";
 import { RetryMenu } from "./RetryMenu";
@@ -261,6 +262,7 @@ function Body({ meetingId, initialSeekMs, onBack, onOpenMeeting, detail, voicepr
             loadProviders={() => api.llmProvidersAvailable()}
             onRetry={(llm) => retry(hasTranscript ? RESUME_STEPS : null, llm)}
           />
+          <MeetingNote key={meeting.id} saved={meeting.userNote} onSave={(note) => void run(() => api.meetingSetNote(meeting.id, note))} />
           {actionError ? <p role="alert" className="inline-error">{actionError}</p> : null}
           {notice ? <p role="status" className="muted">{notice}</p> : null}
         </header>

@@ -77,6 +77,7 @@ async fn real_claude_generates_minutes_with_shipped_schema() {
         ],
         captures: vec![CaptureRef { ref_id: "c1".into(), capture_id: CaptureId::from_u128(9), at: MediaMs(6_000), reason: CaptureReason::SlideChange }],
         language: "es".into(),
+        user_note: None,
     };
     let out = LlmMinutesGenerator::new(p, Arc::new(SystemClock)).generate(input).await.expect("acta real");
     eprintln!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());

@@ -10,6 +10,7 @@
 //! | `meetings_list` | `{ query: MeetingQuery }` | `Page<MeetingSummary>` |
 //! | `meeting_get` | `{ id }` | `MeetingDetail` |
 //! | `meeting_update` | `{ id, title }` | `Meeting` |
+//! | `meeting_set_note` | `{ id, note }` | `Meeting` (nota personal; vacía la borra) |
 //! | `meeting_delete` | `{ id }` | `null` |
 //! | `meeting_set_favourite` | `{ id, favourite }` | `Meeting` |
 //! | `group_set_favourite` | `{ id, favourite }` | `Group` |
@@ -135,6 +136,7 @@ pub mod command_names {
     pub const LOCAL_LLM_CANCEL: &str = "local_llm_cancel";
     pub const LOCAL_LLM_DELETE: &str = "local_llm_delete";
     pub const LOCAL_LLM_TEST: &str = "local_llm_test";
+    pub const MEETING_SET_NOTE: &str = "meeting_set_note";
     pub const MEETING_SET_FAVOURITE: &str = "meeting_set_favourite";
     pub const GROUP_SET_FAVOURITE: &str = "group_set_favourite";
     pub const CLEANUP_SUGGESTIONS: &str = "cleanup_suggestions";

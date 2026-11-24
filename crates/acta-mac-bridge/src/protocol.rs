@@ -561,6 +561,9 @@ pub struct ScreenFrameEvent {
     pub width: u32,
     pub height: u32,
     pub keyword: Option<String>,
+    /// Miniatura gris 64×36 en hex (4608 chars). Ausente en sidecars viejos.
+    #[serde(default)]
+    pub thumb: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -806,6 +809,16 @@ mod tests {
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn screen_frame_thumbnail_is_optional_for_older_sidecars() {
+        let old = r#"{"path":"/p","at_unix_ms":1,"reason":"manual","phash":"00","width":1,"height":1,"keyword":null}"#;
+        assert_eq!(serde_json::from_str::<ScreenFrameEvent>(old).unwrap().thumb, None);
+        let new = r#"{"path":"/p","at_unix_ms":1,"reason":"slide_change","phash":"00","width":1,"height":1,"keyword":null,"thumb":"0a0b"}"#;
+        let ev: ScreenFrameEvent = serde_json::from_str(new).unwrap();
+        assert_eq!(ev.thumb.as_deref(), Some("0a0b"));
+        assert_eq!(crate::screen::frame_from_wire(ev).thumb.as_deref(), Some("0a0b"));
     }
 
     #[test]

@@ -66,6 +66,10 @@ pub struct CapturedFrame {
     pub width: u32,
     pub height: u32,
     pub keyword: Option<String>,
+    /// Miniatura gris 64×36 en hex (4608 chars) para el filtro de capturas;
+    /// no se guarda. `None` con sidecars viejos.
+    #[serde(default)]
+    pub thumb: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -16,6 +16,7 @@ export const COMMANDS = {
   meetingsList: "meetings_list",
   meetingGet: "meeting_get",
   meetingUpdate: "meeting_update",
+  meetingSetNote: "meeting_set_note",
   meetingDelete: "meeting_delete",
   meetingReprocess: "meeting_reprocess",
   speakerRename: "speaker_rename",
@@ -142,6 +143,8 @@ export interface ActaApi {
   meetingsList(query: T.MeetingQuery): Promise<T.Page<T.MeetingSummary>>;
   meetingGet(id: T.MeetingId): Promise<T.MeetingDetail>;
   meetingUpdate(id: T.MeetingId, title: string): Promise<T.Meeting>;
+  /** Nota personal de la reunión; en blanco la borra. */
+  meetingSetNote(id: T.MeetingId, note: string): Promise<T.Meeting>;
   meetingDelete(id: T.MeetingId): Promise<void>;
   /** Pone o quita la estrella. Las favoritas nunca se sugieren para borrar. */
   meetingSetFavourite(id: T.MeetingId, favourite: boolean): Promise<T.Meeting>;
