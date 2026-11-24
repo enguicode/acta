@@ -9,7 +9,7 @@ export interface PillProps {
   elapsedMs: number;
   levels: Levels | null;
   warning: HealthWarning | null;
-  /** Segundos hasta la parada automática si hay pregunta de parar abierta. */
+  /** Segundos hasta la parada automática o fin de la ventana de descarte. */
   countdownS: number | null;
   /** Segundos totales de esa cuenta atrás (para la barra que se agota). */
   countdownTotalS?: number | null;
@@ -112,16 +112,30 @@ export function OverlayPill(p: PillProps) {
           </button>
         </div>
         {stop && stop.kind === "stopRecording" ? (
-          <Question
-            title={stop.reason === "silence" ? "Parece que no habla nadie — ¿Parar?" : "La llamada ha terminado — ¿Parar?"}
-            label="La llamada ha terminado"
-            prompt={stop}
-            yes="Parar"
-            no="Seguir grabando"
-            note={p.countdownS != null ? `Si nadie habla, parará solo en ${formatClock(p.countdownS * 1000)}` : undefined}
-            remaining={p.countdownS != null && p.countdownTotalS ? p.countdownS / p.countdownTotalS : null}
-            onAnswer={p.onAnswer}
-          />
+          stop.reason === "autoStarted" ? (
+            <Question
+              title="Grabación automática iniciada"
+              label="Grabación automática"
+              prompt={stop}
+              yes="Descartar"
+              no="Seguir grabando"
+              note={p.countdownS != null ? `Si paras en ${formatClock(p.countdownS * 1000)}, se descartará` : "Si paras ahora, se descartará la grabación."}
+              danger
+              remaining={p.countdownS != null && p.countdownTotalS ? p.countdownS / p.countdownTotalS : null}
+              onAnswer={p.onAnswer}
+            />
+          ) : (
+            <Question
+              title={stop.reason === "silence" ? "Parece que no habla nadie — ¿Parar?" : "La llamada ha terminado — ¿Parar?"}
+              label="La llamada ha terminado"
+              prompt={stop}
+              yes="Parar"
+              no="Seguir grabando"
+              note={p.countdownS != null ? `Si nadie habla, parará solo en ${formatClock(p.countdownS * 1000)}` : undefined}
+              remaining={p.countdownS != null && p.countdownTotalS ? p.countdownS / p.countdownTotalS : null}
+              onAnswer={p.onAnswer}
+            />
+          )
         ) : null}
         {p.warning ? (
           <p role="alert" className="warn">

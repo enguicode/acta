@@ -263,9 +263,37 @@ export function DetectionSection({ value, onChange, apps }: DetectionProps) {
   const dictation = dictationApps(apps.apps ?? [], value.denylist);
 
   return (
-    <Section title="Detección" hint="Cuando una de estas apps entra en una llamada, acta te pregunta si quieres grabarla. Nunca graba sin preguntar.">
+    <Section
+      title="Detección"
+      hint={
+        value.autoRecord
+          ? "Cuando una de estas apps entra en una llamada, acta empieza a grabar sola; si la paras durante los primeros segundos, la descarta."
+          : "Cuando una de estas apps entra en una llamada, acta te pregunta si quieres grabarla. Nunca graba sin preguntar."
+      }
+    >
       <Group>
         <ToggleRow label="Detectar reuniones automáticamente" hint="Si lo apagas, solo se graba cuando pulses «Grabar ahora»." checked={value.enabled} onChange={(enabled) => onChange({ ...value, enabled })} />
+        {value.enabled ? (
+          <ToggleRow
+            label="Grabar automáticamente al detectar una llamada"
+            hint="Empieza a grabar nada más detectar la llamada; si la paras durante la ventana de descarte, borra la reunión y su audio."
+            checked={value.autoRecord}
+            onChange={(autoRecord) => onChange({ ...value, autoRecord })}
+          />
+        ) : null}
+        {value.enabled && value.autoRecord ? (
+          <StepperRow
+            label="Segundos para poder descartar"
+            title="Ventana de descarte al iniciar"
+            hint="Si paras la grabación antes de ese tiempo, se descarta todo. 0 s guarda siempre."
+            unit="s"
+            min={0}
+            max={120}
+            step={5}
+            value={value.autoRecordDelayS}
+            onChange={(autoRecordDelayS) => onChange({ ...value, autoRecordDelayS })}
+          />
+        ) : null}
       </Group>
 
       <AppListEditor

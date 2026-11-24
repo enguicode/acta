@@ -87,6 +87,13 @@ pub struct DetectionSettings {
     /// Bundle ids que NUNCA disparan la detección aunque usen el micro
     /// (apps de dictado como Typeless u Orca). Se aplica antes que `rules`.
     pub denylist: Vec<String>,
+    /// Empezar a grabar automáticamente al detectar una llamada. Si el usuario
+    /// la para dentro de `auto_record_delay_s`, se descarta por completo.
+    /// Apagado por defecto (opt-in explícito).
+    pub auto_record: bool,
+    /// Segundos desde el inicio automático durante los cuales parar la grabación
+    /// la descarta (borra audio y reunión). `0` guarda siempre.
+    pub auto_record_delay_s: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -194,6 +201,8 @@ impl Default for DetectionSettings {
             poll_ms: 1_000,
             debounce_ms: 3_000,
             denylist: Vec::new(),
+            auto_record: false,
+            auto_record_delay_s: 10,
         }
     }
 }

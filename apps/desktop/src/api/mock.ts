@@ -188,6 +188,8 @@ export function defaultSettings(): T.Settings {
       startPromptTimeoutS: 90,
       pollMs: 1_000,
       debounceMs: 3_000,
+      autoRecord: false,
+      autoRecordDelayS: 10,
     },
     screen: {
       enabled: false,

@@ -38,6 +38,8 @@ pub enum StopPromptReason {
     MeetingEnded,
     /// Silencio prolongado en ambas pistas sin señal de fin.
     Silence,
+    /// Grabación automática recién iniciada: si se para en los primeros N s se descarta.
+    AutoStarted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +118,9 @@ pub enum SessionState {
 #[serde(tag = "event", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SessionEvent {
     MeetingDetected { app: MeetingApp, at: UnixMs },
+    /// Reunión detectada con grabación automática activa: empieza a grabar ya
+    /// y, si `open_discard_prompt`, abre la ventana temporal para descartarla.
+    AutoRecordStarted { app: MeetingApp, open_discard_prompt: bool, at: UnixMs },
     MeetingEnded { at: UnixMs },
     PromptAnswered { prompt_id: PromptId, answer: PromptAnswer, at: UnixMs },
     /// La pregunta de inicio caducó sin respuesta.
@@ -256,6 +261,35 @@ impl SessionState {
             (S::Idle | S::Ready { .. } | S::Failed { .. } | S::Processing { .. }, E::StartRequested { app, at }) => {
                 Ok(start_recording(ids.meeting_id(), app, at, None))
             }
+            (
+                S::Idle | S::Ready { .. } | S::Failed { .. } | S::Processing { .. },
+                E::AutoRecordStarted { app, open_discard_prompt, at },
+            ) => {
+                let meeting_id = ids.meeting_id();
+                let mut effects = vec![Effect::StartCapture {
+                    meeting_id,
+                    app: Some(app.clone()),
+                    at,
+                }];
+                let stop_prompt = open_discard_prompt.then(|| {
+                    let prompt = Prompt {
+                        id: ids.prompt_id(),
+                        kind: PromptKind::StopRecording { reason: StopPromptReason::AutoStarted },
+                        created_at: at,
+                    };
+                    effects.push(Effect::ShowPrompt { prompt: prompt.clone() });
+                    prompt
+                });
+                Ok(Transition {
+                    next: S::Recording(ActiveRecording {
+                        meeting_id,
+                        app: Some(app),
+                        started_at: at,
+                        stop_prompt,
+                    }),
+                    effects,
+                })
+            }
             (S::Idle, E::RecoveryRequired { meeting_id }) => Ok(Transition {
                 next: S::Recovering { meeting_id },
                 effects: vec![Effect::RunRecovery { meeting_id }],
@@ -293,10 +327,10 @@ impl SessionState {
                 at,
                 Some(prompt.id),
             )),
-            (S::Detected { .. }, E::MeetingDetected { .. }) => Ok(stay()),
+            (S::Detected { .. }, E::MeetingDetected { .. } | E::AutoRecordStarted { .. }) => Ok(stay()),
 
             // --- Recording / Paused ---
-            (S::Recording(_) | S::Paused { .. }, E::MeetingDetected { .. }) => Ok(stay()),
+            (S::Recording(_) | S::Paused { .. }, E::MeetingDetected { .. } | E::AutoRecordStarted { .. }) => Ok(stay()),
             (S::Recording(rec), E::PauseRequested { at }) => Ok(Transition {
                 next: S::Paused {
                     recording: rec.clone(),
@@ -330,7 +364,13 @@ impl SessionState {
                     return Err(invalid(&E::PromptAnswered { prompt_id, answer, at }));
                 };
                 match answer {
-                    PromptAnswer::Accept => Ok(stop(rec, StopReason::MeetingEndedConfirmed, at)),
+                    PromptAnswer::Accept => {
+                        let reason = match open.kind {
+                            PromptKind::StopRecording { reason: StopPromptReason::AutoStarted } => StopReason::Discarded,
+                            _ => StopReason::MeetingEndedConfirmed,
+                        };
+                        Ok(stop(rec, reason, at))
+                    }
                     PromptAnswer::Decline => {
                         let cleared = ActiveRecording {
                             stop_prompt: None,
@@ -350,8 +390,20 @@ impl SessionState {
                     }
                 }
             }
-            (S::Recording(rec) | S::Paused { recording: rec, .. }, E::StopRequested { reason, at })
-            | (S::Recording(rec) | S::Paused { recording: rec, .. }, E::AutoStopDue { reason, at }) => {
+            (S::Recording(rec) | S::Paused { recording: rec, .. }, E::StopRequested { reason, at }) => {
+                let effective = if reason == StopReason::User
+                    && matches!(
+                        rec.stop_prompt.as_ref().map(|p| &p.kind),
+                        Some(PromptKind::StopRecording { reason: StopPromptReason::AutoStarted })
+                    )
+                {
+                    StopReason::Discarded
+                } else {
+                    reason
+                };
+                Ok(stop(rec, effective, at))
+            }
+            (S::Recording(rec) | S::Paused { recording: rec, .. }, E::AutoStopDue { reason, at }) => {
                 Ok(stop(rec, reason, at))
             }
             (S::Recording(rec) | S::Paused { recording: rec, .. }, E::Fatal { at, .. }) => {
@@ -359,10 +411,17 @@ impl SessionState {
             }
 
             // --- Stopping ---
-            (S::Stopping { meeting_id, .. }, E::CaptureFinalized { meeting_id: done }) if *meeting_id == done => {
-                Ok(start_processing(done))
+            (S::Stopping { meeting_id, reason }, E::CaptureFinalized { meeting_id: done }) if *meeting_id == done => {
+                if *reason == StopReason::Discarded {
+                    Ok(Transition { next: S::Idle, effects: vec![] })
+                } else {
+                    Ok(start_processing(done))
+                }
             }
-            (S::Stopping { .. }, E::MeetingEnded { .. } | E::MeetingDetected { .. } | E::SilenceDetected { .. }) => {
+            (
+                S::Stopping { .. },
+                E::MeetingEnded { .. } | E::MeetingDetected { .. } | E::AutoRecordStarted { .. } | E::SilenceDetected { .. },
+            ) => {
                 Ok(stay())
             }
 
@@ -517,6 +576,7 @@ impl SessionEvent {
     pub fn name(&self) -> &'static str {
         match self {
             SessionEvent::MeetingDetected { .. } => "meetingDetected",
+            SessionEvent::AutoRecordStarted { .. } => "autoRecordStarted",
             SessionEvent::MeetingEnded { .. } => "meetingEnded",
             SessionEvent::PromptAnswered { .. } => "promptAnswered",
             SessionEvent::PromptExpired { .. } => "promptExpired",

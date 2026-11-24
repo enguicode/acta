@@ -50,9 +50,10 @@ export type StopReason =
   | "autoSilence"
   | "maxDuration"
   | "appQuit"
-  | "error";
+  | "error"
+  | "discarded";
 
-export type StopPromptReason = "meetingEnded" | "silence";
+export type StopPromptReason = "meetingEnded" | "silence" | "autoStarted";
 
 export type PromptKind =
   | { kind: "startRecording"; app: MeetingApp }
@@ -796,6 +797,8 @@ export interface Settings {
     startPromptTimeoutS: number;
     pollMs: number;
     debounceMs: number;
+    autoRecord: boolean;
+    autoRecordDelayS: number;
   };
   screen: {
     enabled: boolean;
