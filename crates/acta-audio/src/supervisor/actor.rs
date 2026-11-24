@@ -20,7 +20,8 @@ use acta_core::permissions::PermissionKind;
 use acta_core::processing::ProcessingStep;
 use acta_core::recording::{
     AudioFormat, AutoStopPolicy, CaptureRequest, Effect, HealthIssue, HealthWarning, IdSource, ManifestStatus,
-    MicTarget, PromptKind, RandomIds, SessionEvent, SessionState, StopReason, SystemTarget, Track,
+    MicTarget, PromptAnswer, PromptKind, RandomIds, SessionEvent, SessionState, StopPromptReason, StopReason,
+    SystemTarget, Track,
 };
 use acta_core::screen::{Capture, CaptureReason, CapturedFrame, ScreenCaptureRequest, ScreenEvent};
 use acta_core::settings::Settings;
@@ -413,6 +414,22 @@ impl Actor {
                 let _ = self.apply(SessionEvent::PromptExpired { prompt_id, at: now }).await;
             }
         }
+        if let SessionState::Recording(rec) | SessionState::Paused { recording: rec, .. } = &self.state
+            && let Some(prompt) = &rec.stop_prompt
+            && matches!(prompt.kind, PromptKind::StopRecording { reason: StopPromptReason::AutoStarted })
+        {
+            let window_ms = i64::from(self.settings.detection.auto_record_delay_s) * 1000;
+            if now.since(prompt.created_at) >= window_ms {
+                let prompt_id = prompt.id;
+                let _ = self
+                    .apply(SessionEvent::PromptAnswered {
+                        prompt_id,
+                        answer: PromptAnswer::Decline,
+                        at: now,
+                    })
+                    .await;
+            }
+        }
         self.retry_screen(now).await;
         let free = (self.ports.disk_free)(self.ports.layout.root());
         let Some(rec) = self.rec.as_mut() else { return };
@@ -455,7 +472,12 @@ impl Actor {
                 if self.settings.detection.denylist.contains(&app.bundle_id) {
                     return;
                 }
-                let _ = self.apply(SessionEvent::MeetingDetected { app, at }).await;
+                if self.settings.detection.auto_record {
+                    let open_discard_prompt = self.settings.detection.auto_record_delay_s > 0;
+                    let _ = self.apply(SessionEvent::AutoRecordStarted { app, open_discard_prompt, at }).await;
+                } else {
+                    let _ = self.apply(SessionEvent::MeetingDetected { app, at }).await;
+                }
             }
             DetectionEvent::MeetingEnded { app, at } => {
                 let relevant = match &self.state {
@@ -586,7 +608,9 @@ impl Actor {
     async fn run_effect(&mut self, effect: Effect) {
         match effect {
             Effect::ShowPrompt { prompt } => {
-                if let (PromptKind::StopRecording { .. }, Some(rec)) = (&prompt.kind, self.rec.as_mut()) {
+                if let (PromptKind::StopRecording { reason }, Some(rec)) = (&prompt.kind, self.rec.as_mut())
+                    && *reason != StopPromptReason::AutoStarted
+                {
                     rec.autostop.on_stop_prompt_opened(prompt.created_at);
                 }
             }
@@ -896,6 +920,21 @@ impl Actor {
             );
         }
         let writer = lock(&rec.core).writer.take();
+        if reason == StopReason::Discarded {
+            drop(writer);
+            if let Err(e) = self.ports.store.delete_meeting(meeting_id).await {
+                tracing::error!("no se pudo borrar la reunión descartada: {e}");
+            }
+            let dir = self.ports.layout.meeting_dir(meeting_id);
+            if let Err(e) = tokio::fs::remove_dir_all(&dir).await
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::error!("no se pudo borrar la carpeta descartada ({}): {e}", dir.display());
+            }
+            self.clear_warnings();
+            self.pending.push_back(SessionEvent::CaptureFinalized { meeting_id });
+            return;
+        }
         let duration = match writer.map(|w| w.finish_reporting(reason, at)) {
             Some(Ok((manifest, failures))) => {
                 for f in failures {

@@ -398,3 +398,87 @@ async fn shutdown_stops_the_recording_cleanly() {
     assert_eq!(read_manifest(&rig.layout, id).unwrap().stop_reason, Some(StopReason::AppQuit));
     h.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn auto_record_starts_immediately_and_stopping_within_window_discards_everything() {
+    let rig = Rig::new();
+    let mut settings = Settings::default();
+    settings.detection.auto_record = true;
+    settings.detection.auto_record_delay_s = 10;
+    let h = start(&rig, settings).await;
+    let mut rx = h.subscribe();
+
+    rig.detector.push(DetectionEvent::MeetingStarted { app: teams_app(), confidence: Confidence::High, at: T0 });
+    let snap = wait_state(&mut rx, "recording").await;
+    let id = recording_id(&snap.state);
+    assert!(rig.store.meeting(id).is_some());
+    assert!(rig.layout.meeting_dir(id).exists());
+    let SessionState::Recording(rec) = &snap.state else { unreachable!() };
+    assert!(matches!(
+        rec.stop_prompt.as_ref().map(|p| &p.kind),
+        Some(acta_core::recording::PromptKind::StopRecording { reason: acta_core::recording::StopPromptReason::AutoStarted })
+    ));
+
+    // Parar dentro de los 10 s descarta la grabación, borra la BD y la carpeta y vuelve a Idle.
+    let snap = h
+        .send(SessionEvent::StopRequested { reason: StopReason::User, at: T0.plus_ms(4_000) })
+        .await
+        .unwrap();
+    assert_eq!(snap.state, SessionState::Idle);
+    assert!(rig.store.meeting(id).is_none());
+    assert!(!rig.layout.meeting_dir(id).exists());
+    assert!(rig.pipeline.runs.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn auto_record_keeps_and_processes_once_the_discard_window_passes() {
+    let rig = Rig::new();
+    let mut settings = Settings::default();
+    settings.detection.auto_record = true;
+    settings.detection.auto_record_delay_s = 10;
+    let h = start(&rig, settings).await;
+    let mut rx = h.subscribe();
+
+    rig.detector.push(DetectionEvent::MeetingStarted { app: teams_app(), confidence: Confidence::High, at: T0 });
+    let snap = wait_state(&mut rx, "recording").await;
+    let id = recording_id(&snap.state);
+
+    // Pasados los 10 s el aviso de descarte se cierra solo.
+    rig.clock.advance_ms(11_000);
+    wait_for(&mut rx, |e| {
+        matches!(e, SupervisorEvent::Snapshot(s) if matches!(&s.state, SessionState::Recording(r) if r.stop_prompt.is_none()))
+    })
+    .await;
+
+    // Parar después de la ventana guarda y procesa la reunión con normalidad.
+    let snap = h
+        .send(SessionEvent::StopRequested { reason: StopReason::User, at: T0.plus_ms(15_000) })
+        .await
+        .unwrap();
+    assert_eq!(snap.state.name(), "processing");
+    assert!(rig.store.meeting(id).is_some());
+    assert!(rig.layout.meeting_dir(id).exists());
+}
+
+#[tokio::test]
+async fn auto_record_with_zero_discard_window_saves_even_if_stopped_early() {
+    let rig = Rig::new();
+    let mut settings = Settings::default();
+    settings.detection.auto_record = true;
+    settings.detection.auto_record_delay_s = 0;
+    let h = start(&rig, settings).await;
+    let mut rx = h.subscribe();
+
+    rig.detector.push(DetectionEvent::MeetingStarted { app: teams_app(), confidence: Confidence::High, at: T0 });
+    let snap = wait_state(&mut rx, "recording").await;
+    let id = recording_id(&snap.state);
+    let SessionState::Recording(rec) = &snap.state else { unreachable!() };
+    assert!(rec.stop_prompt.is_none());
+
+    let snap = h
+        .send(SessionEvent::StopRequested { reason: StopReason::User, at: T0.plus_ms(2_000) })
+        .await
+        .unwrap();
+    assert_eq!(snap.state.name(), "processing");
+    assert!(rig.store.meeting(id).is_some());
+}

@@ -58,6 +58,27 @@ describe("Overlay", () => {
     expect(spy).toHaveBeenCalledWith("p1", "decline");
   });
 
+  it("grabación automática: muestra ventana de descarte y permite descartar", async () => {
+    const created = Date.now();
+    const mock = createMockApi();
+    mock.controls.state.settings.detection.autoRecord = true;
+    mock.controls.state.settings.detection.autoRecordDelayS = 10;
+    const autoPrompt: Prompt = { kind: "stopRecording", reason: "autoStarted", id: "p-auto", createdAt: created };
+    mock.controls.state.snapshot = snap(recording({ stopPrompt: autoPrompt }));
+    render(
+      <ApiProvider api={mock.api}>
+        <OverlayContainer />
+      </ApiProvider>,
+    );
+    const box = await screen.findByRole("group", { name: "Grabación automática" });
+    expect(within(box).getByText(/Si paras en 00:10, se descartará/)).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(4_000));
+    expect(within(box).getByText(/Si paras en 00:06, se descartará/)).toBeInTheDocument();
+    const spy = vi.spyOn(mock.api, "promptAnswer");
+    await userEvent.click(within(box).getByRole("button", { name: "Descartar" }), { advanceTimers: vi.advanceTimersByTime });
+    expect(spy).toHaveBeenCalledWith("p-auto", "accept");
+  });
+
   it("grabando: temporizador, medidores y controles", async () => {
     const { controls, api } = setup(snap(recording(), { elapsedMs: 65_000 }));
     expect(await screen.findByText("01:05")).toBeInTheDocument();

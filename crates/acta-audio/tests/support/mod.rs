@@ -366,7 +366,10 @@ impl MeetingStore for FakeStore {
             .collect();
         Ok(Page { items, next_cursor: None })
     }
-    async fn delete_meeting(&self, _id: MeetingId) -> PortResult<()> { nope("delete") }
+    async fn delete_meeting(&self, id: MeetingId) -> PortResult<()> {
+        self.meetings.lock().unwrap().remove(&id);
+        Ok(())
+    }
     async fn set_meeting_favourite(&self, _id: MeetingId, _f: bool) -> PortResult<Meeting> { nope("favourite") }
     async fn touch_meeting(&self, _id: MeetingId, _t: MeetingTouch, _at: acta_core::time::UnixMs) -> PortResult<()> { Ok(()) }
     async fn set_cleanup_keep(&self, _id: MeetingId, _k: bool) -> PortResult<()> { nope("keep") }

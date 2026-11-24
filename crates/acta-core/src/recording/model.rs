@@ -143,6 +143,9 @@ pub enum StopReason {
     AppQuit,
     /// Error irrecuperable de captura: se para y se procesa lo que haya.
     Error,
+    /// Parada dentro de la ventana de descarte de una grabación automática:
+    /// se borra la reunión y sus archivos sin procesar.
+    Discarded,
 }
 
 // ---------------------------------------------------------------------------
